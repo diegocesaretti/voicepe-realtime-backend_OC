@@ -45,7 +45,8 @@ List audio devices:
 On Diego's PC the Kinect was observed as:
 
 - `Varios micrófonos (Kinect USB Audio)`
-- WASAPI index `9`
+- WASAPI index varies by Windows boot/audio state; observed values include `9`
+  and `14`
 - 4 input channels
 - 16 kHz default sample rate
 
