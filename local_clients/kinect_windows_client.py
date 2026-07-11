@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import sounddevice as sd
@@ -90,6 +91,7 @@ class AudioIO:
         self.input_sample_rate = input_sample_rate
         self.input_channels = input_channels
         self.input_queue: queue.Queue[bytes] = queue.Queue(maxsize=100)
+        self.wake_queue: queue.Queue[bytes] = queue.Queue(maxsize=100)
         self.output_queue: queue.Queue[bytes] = queue.Queue(maxsize=100)
         self._output_buffer = bytearray()
         self._closed = threading.Event()
@@ -136,8 +138,13 @@ class AudioIO:
             print(f"input status: {status}", file=sys.stderr)
         if self._closed.is_set():
             return
+        pcm = pcm16_mono_bytes(indata)
         try:
-            self.input_queue.put_nowait(pcm16_mono_bytes(indata))
+            self.input_queue.put_nowait(pcm)
+        except queue.Full:
+            pass
+        try:
+            self.wake_queue.put_nowait(pcm)
         except queue.Full:
             pass
 
@@ -233,6 +240,52 @@ async def keyboard_loop(ws, audio: AudioIO, state: ClientState, stop_event: asyn
         print("listening...")
 
 
+def ensure_wake_model(model_name: str, inference_framework: str) -> None:
+    import openwakeword
+    from openwakeword.utils import download_models
+
+    model_info = openwakeword.MODELS.get(model_name)
+    if not model_info:
+        return
+    model_path = Path(model_info["model_path"])
+    if inference_framework == "onnx":
+        model_path = model_path.with_suffix(".onnx")
+    if not model_path.exists():
+        print(f"Downloading wake model {model_name}...")
+        download_models([model_name])
+
+
+async def wake_word_loop(ws, audio: AudioIO, state: ClientState, stop_event: asyncio.Event, args) -> None:
+    from openwakeword.model import Model
+
+    ensure_wake_model(args.wake_model, args.wake_inference_framework)
+    model = await asyncio.to_thread(
+        Model,
+        wakeword_models=[args.wake_model],
+        inference_framework=args.wake_inference_framework,
+    )
+    last_wake = 0.0
+    print(
+        f"Wake-word mode: say '{args.wake_phrase}' "
+        f"(model={args.wake_model}, threshold={args.wake_threshold})"
+    )
+    while not stop_event.is_set():
+        try:
+            chunk = await asyncio.to_thread(audio.wake_queue.get, True, 0.1)
+        except queue.Empty:
+            continue
+        samples = np.frombuffer(chunk, dtype=np.int16)
+        scores = await asyncio.to_thread(model.predict, samples)
+        score = max((float(v) for v in scores.values()), default=0.0)
+        now = time.monotonic()
+        if score >= args.wake_threshold and now - last_wake >= args.wake_cooldown_seconds:
+            last_wake = now
+            if not state.mic_open:
+                state.mic_open = True
+                await send_json(ws, {"type": "wake"})
+                print(f"wake detected ({score:.2f}); listening...")
+
+
 async def ping_loop(ws, stop_event: asyncio.Event) -> None:
     while not stop_event.is_set():
         await asyncio.sleep(20)
@@ -270,12 +323,16 @@ async def run_client(args) -> None:
         audio.start()
         await send_json(ws, {"type": "start", "client": "openclaw-kinect-windows"})
         try:
-            await asyncio.gather(
+            tasks = [
                 audio_sender(ws, audio, state, stop_event),
                 receiver(ws, audio, state, stop_event),
-                keyboard_loop(ws, audio, state, stop_event, args.open_mic),
                 ping_loop(ws, stop_event),
-            )
+            ]
+            if args.wake_word:
+                tasks.append(wake_word_loop(ws, audio, state, stop_event, args))
+            else:
+                tasks.append(keyboard_loop(ws, audio, state, stop_event, args.open_mic))
+            await asyncio.gather(*tasks)
         finally:
             audio.close()
 
@@ -325,6 +382,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input-sample-rate", type=int, default=DEFAULT_INPUT_SAMPLE_RATE)
     parser.add_argument("--input-channels", type=int, default=0, help="Default: device max")
     parser.add_argument("--open-mic", action="store_true", help="Stream continuously after connection")
+    parser.add_argument("--wake-word", action="store_true", help="Use local openWakeWord detection before streaming")
+    parser.add_argument("--wake-model", default="hey_jarvis")
+    parser.add_argument("--wake-phrase", default="hey jarvis")
+    parser.add_argument("--wake-threshold", type=float, default=0.55)
+    parser.add_argument("--wake-cooldown-seconds", type=float, default=2.0)
+    parser.add_argument("--wake-inference-framework", choices=("onnx", "tflite"), default="onnx")
     return parser.parse_args()
 
 
@@ -341,4 +404,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
