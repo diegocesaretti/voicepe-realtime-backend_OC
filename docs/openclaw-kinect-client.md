@@ -44,7 +44,7 @@ List audio devices:
 
 On Diego's PC the Kinect was observed as:
 
-- `Varios micrófonos (Kinect USB Audio)`
+- `Varios micrÃ³fonos (Kinect USB Audio)`
 - WASAPI index varies by Windows boot/audio state; observed values include `9`
   and `14`
 - 4 input channels
@@ -68,6 +68,16 @@ Controls:
 - Type `s` then Enter to send `interrupt`.
 - Type `q` then Enter to quit.
 
+Wake-word mode uses openWakeWord locally on Windows and sends backend `wake`
+only after the local detector fires:
+
+```powershell
+.venv-kinect\Scripts\python.exe local_clients\kinect_windows_client.py --input-device Kinect --wake-word
+```
+
+The default wake model is `hey_jarvis`; tune sensitivity with
+`--wake-threshold` if it is too eager or too deaf.
+
 For continuous testing:
 
 ```powershell
@@ -78,10 +88,9 @@ For continuous testing:
 
 1. Replace Home Assistant-only MCP assumptions with an OpenClaw tool bridge,
    while keeping a small Home Assistant allowlist for direct home controls.
-2. Add a wake-word frontend for Windows. The backend already understands wake
-   and enrollment events, but the current Kinect client only has keyboard wake
-   and open-mic modes.
+2. Tune the Windows wake-word threshold for Diego's room and speaker placement.
 3. Wire speaker enrollment storage to OpenClaw paths instead of Home Assistant
    add-on `/share` paths when running outside Home Assistant.
 4. Add a Windows service or OpenClaw-managed process wrapper after the voice
    loop is stable.
+
