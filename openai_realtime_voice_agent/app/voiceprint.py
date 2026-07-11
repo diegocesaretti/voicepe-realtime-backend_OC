@@ -6,7 +6,7 @@ recordings. Falls back cleanly: no model file or no centroids -> the caller
 keeps using the pitch heuristic.
 
 Centroids live in /share/voice-prints/<name>.json ({"name","embedding":[...]})
-— built by embedding enrollment audio (see enroll_centroid()). Thresholds per
+â€” built by embedding enrollment audio (see enroll_centroid()). Thresholds per
 wyoming-voice-match field data: enrolled speakers score ~0.35-0.7 cosine,
 strangers ~0.05-0.25.
 """
@@ -20,7 +20,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 MODEL_PATH = os.environ.get("VOICEPRINT_MODEL", "/opt/voiceprint/embedder.onnx")
-PRINTS_DIR = "/share/voice-prints"
+PRINTS_DIR = os.environ.get("VOICEPRINT_PRINTS_DIR", "/share/voice-prints")
 MATCH_THRESHOLD = 0.40      # >= : that person
 UNCERTAIN_THRESHOLD = 0.28  # between: uncertain; below: unknown (guest)
 SAMPLE_RATE = 16000
@@ -39,9 +39,9 @@ def _load_extractor():
         import sherpa_onnx
         cfg = sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=MODEL_PATH, num_threads=2)
         _extractor = sherpa_onnx.SpeakerEmbeddingExtractor(cfg)
-        logger.info(f"🧬 voice-print embedder loaded ({MODEL_PATH})")
+        logger.info(f"ðŸ§¬ voice-print embedder loaded ({MODEL_PATH})")
     except Exception as e:
-        logger.warning(f"⚠️ voice-print embedder unavailable: {e!r}")
+        logger.warning(f"âš ï¸ voice-print embedder unavailable: {e!r}")
         _extractor = None
     return _extractor
 
@@ -59,10 +59,10 @@ def _load_prints() -> dict:
     except FileNotFoundError:
         pass
     except Exception as e:
-        logger.warning(f"⚠️ voice-print load failed: {e!r}")
+        logger.warning(f"âš ï¸ voice-print load failed: {e!r}")
     _prints = out
     if out:
-        logger.info(f"🧬 voice prints loaded: {sorted(out)}")
+        logger.info(f"ðŸ§¬ voice prints loaded: {sorted(out)}")
     return out
 
 
@@ -109,7 +109,7 @@ def _voiced_only(pcm16: bytes) -> bytes:
 def identify(pcm16: bytes) -> Tuple[str, Optional[str], float]:
     """Returns (level, name, score): level in {match, uncertain, unknown, unavailable}."""
     voiced = _voiced_only(pcm16)
-    # Guard on VOICED duration — below it, defer to the pitch fallback rather
+    # Guard on VOICED duration â€” below it, defer to the pitch fallback rather
     # than embed unreliable audio (validated: short-clip embeddings are noisy).
     if len(voiced) < int(MIN_IDENTIFY_SECONDS * SAMPLE_RATE * 2):
         return "unavailable", None, 0.0
@@ -128,3 +128,4 @@ def identify(pcm16: bytes) -> Tuple[str, Optional[str], float]:
     if best >= UNCERTAIN_THRESHOLD:
         return "uncertain", best_name, best
     return "unknown", None, best
+
