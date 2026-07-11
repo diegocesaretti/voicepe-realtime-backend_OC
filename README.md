@@ -1,5 +1,10 @@
 # Voice PE Realtime — backend add-on
 
+> OpenClaw fork note: this fork is being adapted for Diego's OpenClaw setup.
+> The first added path is a Windows Kinect local client in
+> `local_clients/kinect_windows_client.py`; see
+> `docs/openclaw-kinect-client.md`.
+
 Turn a Home Assistant Voice PE into a natural speech-to-speech assistant powered
 by the OpenAI Realtime API — with instant smart-home control, speaker awareness,
 and on-device voice training. This is the **backend half**: a Home Assistant
