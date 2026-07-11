@@ -9,6 +9,7 @@ $DataDir = Join-Path $Repo "data"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $DataDir "voice-enrollment") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $DataDir "enroll-prompts") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $DataDir "voice-prints") | Out-Null
 
 $OpenAiSecret = Get-Content -Raw "C:\Users\diego\.openclaw\secrets\openai.json" | ConvertFrom-Json
 $env:OPENAI_API_KEY = $OpenAiSecret.api_key
@@ -21,6 +22,8 @@ $env:TRANSCRIPTION_LANGUAGE = "es"
 $env:ENROLL_DIR = Join-Path $DataDir "voice-enrollment"
 $env:ENROLL_PROMPT_CACHE_DIR = Join-Path $DataDir "enroll-prompts"
 $env:ENROLLMENT_PHRASE = "hey jarvis"
+$env:VOICEPRINT_PRINTS_DIR = Join-Path $DataDir "voice-prints"
+$env:VOICEPRINT_MODEL = Join-Path $DataDir "voiceprint\embedder.onnx"
 $env:INSTRUCTIONS = "Sos Jarvis, asistente personal y de BWA 3D de Diego. HablÃ¡ en espaÃ±ol rioplatense, breve y natural. PodÃ©s ayudar con OpenClaw y controlar Home Assistant usando solo tools seguras."
 
 Set-Location $AppDir
