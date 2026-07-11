@@ -76,6 +76,10 @@ class ClientState:
     mic_open: bool
     continuous: bool = False
     quit_requested: bool = False
+    phase: str = "idle"
+    reply_seen: bool = False
+    follow_up_ms: int = 0
+    follow_up_open_delay_ms: int = 0
 
 
 class AudioIO:
@@ -188,7 +192,20 @@ async def audio_sender(ws, audio: AudioIO, state: ClientState, stop_event: async
             await ws.send(chunk)
 
 
-async def receiver(ws, audio: AudioIO, state: ClientState, stop_event: asyncio.Event) -> None:
+async def follow_up_window(state: ClientState) -> None:
+    if state.follow_up_open_delay_ms > 0:
+        await asyncio.sleep(state.follow_up_open_delay_ms / 1000)
+    if state.quit_requested or state.phase != "idle":
+        return
+    state.mic_open = True
+    print("follow-up listening...")
+    await asyncio.sleep(state.follow_up_ms / 1000)
+    if state.phase == "idle" and not state.continuous:
+        state.mic_open = False
+        print("follow-up closed")
+
+
+async def receiver(ws, audio: AudioIO, state: ClientState, stop_event: asyncio.Event, args) -> None:
     async for message in ws:
         if isinstance(message, bytes):
             try:
@@ -205,16 +222,32 @@ async def receiver(ws, audio: AudioIO, state: ClientState, stop_event: asyncio.E
 
         msg_type = data.get("type")
         if msg_type == "hello":
+            if args.follow_up_ms is not None:
+                state.follow_up_ms = max(0, args.follow_up_ms)
+            else:
+                state.follow_up_ms = max(0, int(data.get("follow_up_ms") or 0))
+            if args.follow_up_open_delay_ms is not None:
+                state.follow_up_open_delay_ms = max(0, args.follow_up_open_delay_ms)
+            else:
+                state.follow_up_open_delay_ms = max(0, int(data.get("follow_up_open_delay_ms") or 0))
             print(f"backend hello: {data}")
         elif msg_type == "phase":
             phase = data.get("value")
+            state.phase = str(phase)
             print(f"phase: {phase}")
             if phase in {"thinking", "replying"}:
                 state.mic_open = False
             if phase == "replying":
+                state.reply_seen = True
                 audio.clear_output()
             if phase == "idle" and not state.quit_requested:
-                state.mic_open = state.continuous
+                if state.continuous:
+                    state.mic_open = True
+                elif state.reply_seen and state.follow_up_ms > 0 and not args.no_follow_up:
+                    state.reply_seen = False
+                    asyncio.create_task(follow_up_window(state))
+                else:
+                    state.mic_open = False
         elif msg_type == "pong":
             pass
         elif msg_type == "ack":
@@ -227,6 +260,8 @@ async def receiver(ws, audio: AudioIO, state: ClientState, stop_event: asyncio.E
 async def trigger_wake(ws, audio: AudioIO, state: ClientState, args) -> None:
     state.mic_open = False
     audio.clear_output()
+    if state.phase == "replying":
+        await send_json(ws, {"type": "interrupt"})
     if args.wake_sound:
         audio.enqueue_tone(args.wake_sound_frequency, args.wake_sound_ms)
     await send_json(ws, {"type": "wake"})
@@ -343,7 +378,7 @@ async def run_client(args) -> None:
         try:
             tasks = [
                 audio_sender(ws, audio, state, stop_event),
-                receiver(ws, audio, state, stop_event),
+                receiver(ws, audio, state, stop_event, args),
                 ping_loop(ws, stop_event),
             ]
             if args.wake_word:
@@ -410,6 +445,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wake-sound-frequency", type=float, default=880.0)
     parser.add_argument("--wake-sound-ms", type=int, default=120)
     parser.add_argument("--wake-open-delay-ms", type=int, default=700)
+    parser.add_argument("--follow-up-ms", type=int, default=None, help="Default: backend hello follow_up_ms")
+    parser.add_argument(
+        "--follow-up-open-delay-ms",
+        type=int,
+        default=None,
+        help="Default: backend hello follow_up_open_delay_ms",
+    )
+    parser.add_argument("--no-follow-up", action="store_true")
     return parser.parse_args()
 
 
@@ -426,6 +469,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 
