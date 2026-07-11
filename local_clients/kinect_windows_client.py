@@ -385,7 +385,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wake-word", action="store_true", help="Use local openWakeWord detection before streaming")
     parser.add_argument("--wake-model", default="hey_jarvis")
     parser.add_argument("--wake-phrase", default="hey jarvis")
-    parser.add_argument("--wake-threshold", type=float, default=0.55)
+    parser.add_argument("--wake-threshold", type=float, default=0.39)
     parser.add_argument("--wake-cooldown-seconds", type=float, default=2.0)
     parser.add_argument("--wake-inference-framework", choices=("onnx", "tflite"), default="onnx")
     return parser.parse_args()
@@ -404,5 +404,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
