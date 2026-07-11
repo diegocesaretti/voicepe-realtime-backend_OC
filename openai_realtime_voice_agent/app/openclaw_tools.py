@@ -215,4 +215,3 @@ def register_openclaw_tools(llm) -> None:
     llm.register_function("ha_get_state", _ha_get_state)
     llm.register_function("ha_search_entities", _ha_search_entities)
     llm.register_function("ha_call_safe_service", _ha_call_safe_service)
-
