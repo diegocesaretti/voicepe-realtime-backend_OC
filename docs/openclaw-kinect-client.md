@@ -44,7 +44,7 @@ List audio devices:
 
 On Diego's PC the Kinect was observed as:
 
-- `Varios micrÃƒÂ³fonos (Kinect USB Audio)`
+- `Varios micrÃƒÆ’Ã‚Â³fonos (Kinect USB Audio)`
 - WASAPI index varies by Windows boot/audio state; observed values include `9`
   and `14`
 - 4 input channels
@@ -79,6 +79,10 @@ The default wake model is `hey_jarvis`. Default threshold is `0.39`, which is
 about 30% more sensitive than the initial `0.55`; tune with `--wake-threshold`
 if it is too eager or too deaf.
 
+By default the client plays a short local wake confirmation tone before opening
+the mic. Disable it with `--no-wake-sound`, or tune it with
+`--wake-sound-frequency`, `--wake-sound-ms`, and `--wake-open-delay-ms`.
+
 For continuous testing:
 
 ```powershell
@@ -94,5 +98,6 @@ For continuous testing:
    add-on `/share` paths when running outside Home Assistant.
 4. Add a Windows service or OpenClaw-managed process wrapper after the voice
    loop is stable.
+
 
 
