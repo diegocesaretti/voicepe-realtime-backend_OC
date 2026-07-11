@@ -73,6 +73,7 @@ def pcm16_mono_bytes(indata: np.ndarray) -> bytes:
 @dataclass
 class ClientState:
     mic_open: bool
+    continuous: bool = False
     quit_requested: bool = False
 
 
@@ -191,10 +192,12 @@ async def receiver(ws, audio: AudioIO, state: ClientState, stop_event: asyncio.E
         elif msg_type == "phase":
             phase = data.get("value")
             print(f"phase: {phase}")
+            if phase in {"thinking", "replying"}:
+                state.mic_open = False
             if phase == "replying":
                 audio.clear_output()
             if phase == "idle" and not state.quit_requested:
-                state.mic_open = False
+                state.mic_open = state.continuous
         elif msg_type == "pong":
             pass
         elif msg_type == "ack":
@@ -249,7 +252,7 @@ async def run_client(args) -> None:
         input_sample_rate=args.input_sample_rate,
         input_channels=input_channels,
     )
-    state = ClientState(mic_open=args.open_mic)
+    state = ClientState(mic_open=args.open_mic, continuous=args.open_mic)
     stop_event = asyncio.Event()
 
     loop = asyncio.get_running_loop()
@@ -338,3 +341,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
