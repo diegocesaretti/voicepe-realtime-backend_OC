@@ -371,6 +371,7 @@ class Application:
         web_search_model = _resolve_choice(
             "WEB_SEARCH_MODEL", "WEB_SEARCH_MODEL_CUSTOM", "gpt-5.5"
         )
+        enable_openclaw_tools = os.environ.get("ENABLE_OPENCLAW_TOOLS", "true").lower() == "true"
 
         # Get recording setting (optional, defaults to false)
         enable_recording = os.environ.get("ENABLE_RECORDING", "false").lower() == "true"
@@ -802,6 +803,9 @@ class Application:
             )
             register_timer_tools(self.openai_service, self.timer_registry)
             logger.info("✅ Registered timer tools (set/cancel/list)")
+            if self.enable_openclaw_tools:
+                register_openclaw_tools(self.openai_service)
+                logger.info("Registered OpenClaw tools")
 
             # Register MCP tool handlers if available
             if self.mcp_client and mcp_tools_schema:
