@@ -19,6 +19,7 @@ from app.session_manager import SessionManager
 from app.websocket_handler import WebSocketHandler
 from app.speaker_context import SpeakerProbe
 from app.timers import TimerRegistry, get_timer_tool_definitions, register_timer_tools
+from app.openclaw_tools import get_openclaw_tool_definitions, register_openclaw_tools
 from app.enrollment import (
     EnrollmentRecorder,
     EnrollmentConductor,
@@ -62,7 +63,7 @@ def _resolve_choice(env_var: str, custom_env_var: str, default: str) -> str:
         if custom:
             return custom
         logger.warning(
-            f"⚠️ {env_var}=custom but {custom_env_var} is empty; falling back to {default!r}"
+            f"âš ï¸ {env_var}=custom but {custom_env_var} is empty; falling back to {default!r}"
         )
         return default
     return choice or default
@@ -74,20 +75,20 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
     """OpenAIRealtimeLLMService with audio-truncation-on-interruption disabled.
 
     pipecat's `_truncate_current_audio_response()` (called by `_handle_interruption`
-    on EVERY interruption — both our device "stop" AND pipecat's own server-VAD
+    on EVERY interruption â€” both our device "stop" AND pipecat's own server-VAD
     barge-in when the user wakes/speaks mid-reply) sends a
     `conversation.item.truncate` with `audio_end_ms = wall-clock ms since audio
     start`. But OpenAI BURSTS the reply faster than real-time, so that elapsed
     value massively overshoots the audio that actually exists, and OpenAI rejects
     it with `invalid_request_error("Audio content of N ms is already shorter than
     M ms")`. That errored truncate wedges the realtime session, so the user's very
-    next turn gets NO response — the recurring "interrupt, then immediately ask
-    again → silence" bug (confirmed in logs: session goes quiet right after
+    next turn gets NO response â€” the recurring "interrupt, then immediately ask
+    again â†’ silence" bug (confirmed in logs: session goes quiet right after
     `_truncate_current_audio_response`).
 
     The device stops playback authoritatively on its own, so server-side
     truncation buys us nothing. No-op it. (Cost: OpenAI's conversation history
-    keeps the full assistant text the user may not have fully heard — purely
+    keeps the full assistant text the user may not have fully heard â€” purely
     cosmetic for context.)
     """
 
@@ -103,16 +104,16 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
         `_create_response()` had already set `_run_llm_when_api_session_ready =
         True` (because `_api_session_ready` went False on disconnect). After the
         reconnect, the `session.updated` handler sees that flag and fires
-        `_create_response()` — but under semantic_vad (`create_response=true`) the
+        `_create_response()` â€” but under semantic_vad (`create_response=true`) the
         SERVER also auto-creates a response for the user's next turn. Two
-        response.create events collide → `conversation_already_has_active_response`,
+        response.create events collide â†’ `conversation_already_has_active_response`,
         and that turn gets no answer (observed: first turn right after a reconnect
-        fails, ~1 in 20 reconnects — whenever the user happens to speak in the few
+        fails, ~1 in 20 reconnects â€” whenever the user happens to speak in the few
         seconds just after a reconnect).
 
         Fix: after the normal reconnect, clear `_run_llm_when_api_session_ready` so
         the reconnected session does NOT self-create a response, and set
-        `_llm_needs_conversation_setup = False` (same as the startup pre-seed) — the
+        `_llm_needs_conversation_setup = False` (same as the startup pre-seed) â€” the
         server-VAD drives every user-turn response, so we never need to create one
         ourselves on reconnect. The live context is untouched (it's restored by the
         SessionManager on the next real turn).
@@ -122,24 +123,24 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
             self._run_llm_when_api_session_ready = False
             self._llm_needs_conversation_setup = False
         except Exception as e:  # pragma: no cover - defensive
-            logger.warning(f"⚠️ could not clear post-reconnect response flags: {e!r}")
+            logger.warning(f"âš ï¸ could not clear post-reconnect response flags: {e!r}")
 
     # Error codes that must NOT kill the realtime session. pipecat 0.0.97's
     # _receive_task_handler does `_handle_evt_error(evt); return` on EVERY
-    # error event — the reader task dies, the in-flight reply cuts off
+    # error event â€” the reader task dies, the in-flight reply cuts off
     # mid-sentence and the session is deaf until the next connection death.
     # Observed live (2026-06-10): semantic_vad split one utterance into two
     # turns, the server's auto-created second response collided with the
-    # first → conversation_already_has_active_response → the playing reply
+    # first â†’ conversation_already_has_active_response â†’ the playing reply
     # stopped at 4.4 s and the session wedged. These codes are harmless
     # protocol races; the right move is to keep reading.
     BENIGN_ERROR_CODES = {
         # The server auto-created a response while one was still active
         # (VAD split a sentence into two turns). The active response keeps
-        # streaming — nothing is broken.
+        # streaming â€” nothing is broken.
         "conversation_already_has_active_response",
         # response.cancel landed after the response already finished (device
-        # "stop" / the post-interrupt racing-response kill) — nothing to
+        # "stop" / the post-interrupt racing-response kill) â€” nothing to
         # cancel, nothing broken.
         "response_cancel_not_active",
         # input_audio_buffer.commit raced our input_audio_buffer.clear (device
@@ -151,7 +152,7 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
         """Generic benign-error filter, hooked into pipecat's receive loop.
 
         pipecat's `_receive_task_handler` treats a True return from this
-        method as "error handled — keep the receive loop alive"; every other
+        method as "error handled â€” keep the receive loop alive"; every other
         error event kills the reader task (`_handle_evt_error` + `return`).
         It is the ONLY surviving path, so besides the original retrieve-item
         case (super()), we declare our benign protocol races handled here
@@ -162,7 +163,7 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
         code = getattr(getattr(evt, "error", None), "code", None)
         if code in self.BENIGN_ERROR_CODES:
             logger.warning(
-                f"⚠️ benign realtime error ignored (session stays alive): {code}"
+                f"âš ï¸ benign realtime error ignored (session stays alive): {code}"
             )
             return True
         return False
@@ -172,7 +173,7 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
         """Force cancel_on_interruption=False for every tool registration.
 
         pipecat cancels in-flight function-call tasks on EVERY user-speech
-        interruption — and semantic_vad fires one per utterance fragment, so
+        interruption â€” and semantic_vad fires one per utterance fragment, so
         merely continuing your own sentence kills the tool call your previous
         fragment started. By then the HTTP request to Home Assistant has
         usually already been SENT: the action executes, but its result never
@@ -192,15 +193,15 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
         """
         async def liveness_tracked(params):
             # Speaker gate (fork): tools listed in male_only_tools only execute
-            # when the last voice-type verdict is "male". Enforced HERE — below
-            # the model — so prompt tricks can't bypass it. Fails closed on
+            # when the last voice-type verdict is "male". Enforced HERE â€” below
+            # the model â€” so prompt tricks can't bypass it. Fails closed on
             # uncertain/stale/absent verdicts. This is convenience gating on a
             # voice-type heuristic, not biometric auth.
             if MALE_ONLY_TOOLS and function_name in MALE_ONLY_TOOLS:
                 speaker = SPEAKER_PROBE.gate_speaker() if SPEAKER_PROBE else "unknown"
                 if speaker != "male":
                     owner = (SPEAKER_PROBE.male_name if SPEAKER_PROBE else "") or "the owner"
-                    logger.info(f"⛔ speaker gate blocked '{function_name}' (speaker={speaker})")
+                    logger.info(f"â›” speaker gate blocked '{function_name}' (speaker={speaker})")
                     await params.result_callback({
                         "error": (
                             f"Not available: this capability is reserved for {owner}, "
@@ -227,21 +228,21 @@ class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
         drop raises ConnectionClosed, which the task manager merely LOGS
         ("unexpected exception"). Nothing reaches ConnectionRecovery either
         way, so the session sat deaf for HOURS until the next user utterance
-        hit the dead socket — losing that utterance (observed live twice).
+        hit the dead socket â€” losing that utterance (observed live twice).
         Wrap the loop and report its end; ConnectionRecovery treats the
         message as a reconnect trigger.
         """
         try:
             await super()._receive_task_handler()
         except asyncio.CancelledError:
-            raise  # our own disconnect/reset tearing the task down — not a death
+            raise  # our own disconnect/reset tearing the task down â€” not a death
         except Exception as e:
             await self.push_error(error_msg=f"realtime receive loop died: {e!r}")
             return
         # Loop ended without an exception: a clean server-side close, or the
-        # fatal-error path (which already pushed its own ErrorFrame —
+        # fatal-error path (which already pushed its own ErrorFrame â€”
         # duplicates collapse in ConnectionRecovery's cooldown/guard).
-        await self.push_error(error_msg="realtime receive loop ended — connection closed")
+        await self.push_error(error_msg="realtime receive loop ended â€” connection closed")
 
 
 class Application:
@@ -279,13 +280,13 @@ class Application:
         # silence-based detector tuned by the vad_* values above.
         turn_detection_type = os.environ.get("TURN_DETECTION_TYPE", "semantic_vad").strip().lower()
         if turn_detection_type not in ("semantic_vad", "server_vad"):
-            logger.warning(f"⚠️ Unknown TURN_DETECTION_TYPE '{turn_detection_type}', falling back to semantic_vad")
+            logger.warning(f"âš ï¸ Unknown TURN_DETECTION_TYPE '{turn_detection_type}', falling back to semantic_vad")
             turn_detection_type = "semantic_vad"
         # semantic_vad eagerness: "low" waits longest before deciding the user is
         # done (fewest mid-sentence cut-offs). low | medium | high | auto.
         vad_eagerness = os.environ.get("VAD_EAGERNESS", "low").strip().lower()
         if vad_eagerness not in ("low", "medium", "high", "auto"):
-            logger.warning(f"⚠️ Unknown VAD_EAGERNESS '{vad_eagerness}', falling back to low")
+            logger.warning(f"âš ï¸ Unknown VAD_EAGERNESS '{vad_eagerness}', falling back to low")
             vad_eagerness = "low"
         # Whether detected user speech may interrupt the assistant's reply
         # (handsfree barge-in). With imperfect device-side AEC, set this false so
@@ -303,7 +304,7 @@ class Application:
         # Expose the `disconnect_client` tool to the model. DEFAULT FALSE: on the
         # Voice PE the device owns its own session lifecycle (wake word starts a
         # turn, the no-speech watchdog / idle phase ends it), so a model-driven
-        # disconnect just tears down the persistent WebSocket mid-conversation —
+        # disconnect just tears down the persistent WebSocket mid-conversation â€”
         # it was seen closing the socket DURING the first reply ("conversation_ended").
         # Only enable if your device relies on the backend to hang up.
         enable_disconnect_tool = os.environ.get("ENABLE_DISCONNECT_TOOL", "false").strip().lower() == "true"
@@ -316,7 +317,7 @@ class Application:
         transcription_language = os.environ.get("TRANSCRIPTION_LANGUAGE", "").strip()
         # Model that transcribes the user's speech to TEXT (the transcript shown
         # in logs + put in the context). NOTE: this is NOT what gpt-realtime-2
-        # uses to understand you — the main model hears the audio natively; this
+        # uses to understand you â€” the main model hears the audio natively; this
         # only affects the side-channel transcript. Default "gpt-4o-transcribe".
         # Alternatives: "gpt-4o-mini-transcribe", "whisper-1", and the newer
         # streaming "gpt-realtime-whisper" (purpose-built for the Realtime API,
@@ -350,226 +351,7 @@ class Application:
         # Pass None when 0/unset so SessionProperties omits it (API default "inf").
         max_output_tokens = max_output_tokens if max_output_tokens > 0 else None
         # Input noise reduction: "near_field" | "far_field" | "" (off). Anything
-        # else is treated as off so a typo can't reach the API.
-        noise_reduction = os.environ.get("NOISE_REDUCTION", "").strip().lower()
-        if noise_reduction not in ("near_field", "far_field"):
-            noise_reduction = ""
-
-        # Optional allow-list to trim the (large) ha-mcp tool set exposed to the
-        # model. Comma-separated tool names; empty means expose all.
-        mcp_tool_allowlist = [t.strip() for t in os.environ.get("MCP_TOOL_ALLOWLIST", "").split(",") if t.strip()]
-        
-        # Web search: let the assistant look things up online (weather, news,
-        # facts). ON by default; existing installs keep their saved option, so an
-        # Update won't silently flip it. When on, a `web_search` function tool
-        # calls OpenAI's Responses web_search built-in tool server-side (using
-        # OPENAI_API_KEY) and returns a short spoken answer. The model is
-        # configurable so a different price/quality — or a renamed model — needs
-        # no code change.
-        enable_web_search = os.environ.get("ENABLE_WEB_SEARCH", "true").lower() == "true"
-        web_search_model = _resolve_choice(
-            "WEB_SEARCH_MODEL", "WEB_SEARCH_MODEL_CUSTOM", "gpt-5.5"
-        )
-
-        # Get recording setting (optional, defaults to false)
-        enable_recording = os.environ.get("ENABLE_RECORDING", "false").lower() == "true"
-        
-        # Post-reply follow-up window: how many seconds the device keeps the mic
-        # open after the assistant finishes so the user can answer back without
-        # re-saying the wake word. Sent to the device in the `hello` handshake as
-        # follow_up_ms; the device opens the mic (after its TTS tail drains) and
-        # shows the listening LED for that long. 0 disables (turn-based).
-        try:
-            follow_up_listen_seconds = int(os.environ.get("FOLLOW_UP_LISTEN_SECONDS", "8"))
-        except (TypeError, ValueError):
-            follow_up_listen_seconds = 8
-        follow_up_listen_seconds = max(0, min(60, follow_up_listen_seconds))
-        follow_up_ms = follow_up_listen_seconds * 1000
-        # Delay (ms) before the follow-up mic opens, bridging the device speaker's
-        # hardware tail so the mic doesn't catch the reply's own end. Sent to the
-        # device in `hello`; lower = snappier, higher = safer against echo.
-        try:
-            follow_up_open_delay_ms = int(os.environ.get("FOLLOW_UP_OPEN_DELAY_MS", "700"))
-        except (TypeError, ValueError):
-            follow_up_open_delay_ms = 700
-        follow_up_open_delay_ms = max(0, min(5000, follow_up_open_delay_ms))
-        # Same idea at the WAKE boundary: delay (ms) after the wake chime before
-        # the mic opens, so the chime's own hardware tail doesn't leak into the
-        # fresh mic and become a ghost turn (the wake-path twin of
-        # follow_up_open_delay_ms — the yaml wake handler reads it via a lambda).
-        try:
-            wake_open_delay_ms = int(os.environ.get("WAKE_OPEN_DELAY_MS", "700"))
-        except (TypeError, ValueError):
-            wake_open_delay_ms = 700
-        wake_open_delay_ms = max(0, min(5000, wake_open_delay_ms))
-        # Playback jitter buffer (ms): the device holds incoming TTS until this
-        # much has accumulated before playing, so a brief network hiccup doesn't
-        # dry out the speaker chain mid-word (audible crackle). Sent in `hello`.
-        try:
-            playback_prebuffer_ms = int(os.environ.get("PLAYBACK_PREBUFFER_MS", "150"))
-        except (TypeError, ValueError):
-            playback_prebuffer_ms = 150
-        playback_prebuffer_ms = max(0, min(2000, playback_prebuffer_ms))
-
-        # Get session reuse timeout and initialize session manager
-        session_reuse_timeout = float(os.environ.get("SESSION_REUSE_TIMEOUT_SECONDS", "300"))
-        # Cap on restored conversation history (0 = unlimited). Bounds per-turn
-        # tokens so a long chat doesn't trip OpenAI's TPM rate limit (gpt-realtime
-        # re-bills the whole conversation on every response; pipecat has no
-        # truncation). Default 12 keeps recent continuity cheaply.
-        try:
-            max_context_messages = int(os.environ.get("MAX_CONTEXT_MESSAGES", "12"))
-        except (TypeError, ValueError):
-            max_context_messages = 12
-        max_context_messages = max(0, max_context_messages)
-        self.session_manager = SessionManager(
-            reuse_timeout=session_reuse_timeout,
-            max_restored_messages=max_context_messages,
-        )
-        logger.info(
-            f"Session reuse timeout: {session_reuse_timeout} seconds, "
-            f"max restored messages: {max_context_messages or 'unlimited'}"
-        )
-        
-        if not openai_api_key:
-            raise ValueError("OPENAI_API_KEY environment variable is required")
-        
-        # Initialize Home Assistant MCP Service
-        mcp_client = None
-        try:
-            supervisor_token = os.environ.get("LONGLIVED_TOKEN") or os.environ.get("SUPERVISOR_TOKEN")
-            ha_mcp_url = os.environ.get("HA_MCP_URL", "http://supervisor/core/api/mcp")
-            if supervisor_token:
-                logger.info("Loading Home Assistant MCP tools...")
-                self.mcp_service = HomeAssistantMCPService(url=ha_mcp_url, access_token=supervisor_token)
-                mcp_client = await self.mcp_service.initialize()
-                logger.info("✅ Home Assistant MCP Client initialized")
-            else:
-                logger.warning("⚠️ SUPERVISOR_TOKEN not set, skipping Home Assistant MCP integration")
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to initialize Home Assistant MCP Client: {e}")
-        
-        # Initialize WebSocket handler
-        self.websocket_handler = WebSocketHandler(
-            host=websocket_host,
-            port=websocket_port,
-            session_manager=self.session_manager,
-            audio_recording_service=self.audio_recording_service,
-            follow_up_ms=follow_up_ms,
-            follow_up_open_delay_ms=follow_up_open_delay_ms,
-            wake_open_delay_ms=wake_open_delay_ms,
-            playback_prebuffer_ms=playback_prebuffer_ms,
-        )
-        logger.info(
-            f"🔁 Follow-up window: {follow_up_listen_seconds}s "
-            f"({'enabled' if follow_up_ms > 0 else 'disabled — turn-based'}), "
-            f"mic-open delay {follow_up_open_delay_ms}ms, "
-            f"wake-open delay {wake_open_delay_ms}ms, "
-            f"playback prebuffer {playback_prebuffer_ms}ms"
-        )
-        # Speaker context v1 (fork): enabled when at least one name is set.
-        global SPEAKER_PROBE, MALE_ONLY_TOOLS
-        if speaker_male_name or speaker_female_name:
-            SPEAKER_PROBE = SpeakerProbe(speaker_male_name, speaker_female_name)
-            MALE_ONLY_TOOLS = male_only_tools
-            self.websocket_handler.speaker_probe = SPEAKER_PROBE
-            logger.info(
-                f"🗣️ Speaker context enabled: male={speaker_male_name or '-'} "
-                f"female={speaker_female_name or '-'}"
-                f"{f', male-only tools: {sorted(male_only_tools)}' if male_only_tools else ''}"
-            )
-        elif male_only_tools:
-            logger.warning("⚠️ male_only_tools set but no speaker names configured — gate inactive")
-
-        # Voice timers: backend-owned registry, device rings via TIMER_RING_ENTITY.
-        self.timer_registry = TimerRegistry()
-
-        # Voice enrollment (fork): guided on-device voice capture, always available.
-        self.enrollment_recorder = EnrollmentRecorder()
-        self.websocket_handler.enrollment_recorder = self.enrollment_recorder
-        self.enrollment_conductor = EnrollmentConductor(
-            self.enrollment_recorder,
-            self.websocket_handler.broadcast_json,
-            self.websocket_handler.broadcast_bytes,
-            openai_api_key,
-            phrase=os.environ.get("ENROLLMENT_PHRASE", "").strip(),
-            tts_voice=os.environ.get("ENROLLMENT_TTS_VOICE", "fable").strip() or "fable",
-        )
-        self.websocket_handler.enrollment_conductor = self.enrollment_conductor
-        # Timers: personalized spoken expiry via the conductor's TTS lane,
-        # owner from the live speaker verdict, wake-ack from the serializer.
-        async def _guarded_say(text):
-            # Suppress inbound mic audio while the announcement plays (+ tail)
-            # so the assistant can't hear itself and reply.
-            ser = self.websocket_handler._serializer
-            import time as _t
-            if ser is not None:
-                ser.suppress_inbound_until = _t.monotonic() + 3600
-            try:
-                await self.enrollment_conductor._say(text)
-            finally:
-                if ser is not None:
-                    ser.suppress_inbound_until = _t.monotonic() + 1.2
-        self.timer_registry.announcer = _guarded_say
-        self.timer_registry.get_owner = (
-            lambda: SPEAKER_PROBE.name_for(SPEAKER_PROBE.gate_speaker()) if SPEAKER_PROBE else None
-        )
-        self.timer_registry.last_wake = (
-            lambda: max(
-                getattr(self.websocket_handler._serializer, "_last_wake_mono", 0.0),
-                getattr(self.websocket_handler._serializer, "_last_button_mono", 0.0),
-            ) if self.websocket_handler._serializer else 0.0
-        )
-
-        self.websocket_transport = self.websocket_handler.create_transport()
-        
-        # Store configuration for session creation
-        self.openai_api_key = openai_api_key
-        self.vad_threshold = vad_threshold
-        self.vad_prefix_padding_ms = vad_prefix_padding_ms
-        self.vad_silence_duration_ms = vad_silence_duration_ms
-        self.turn_detection_type = turn_detection_type
-        self.vad_eagerness = vad_eagerness
-        self.interrupt_response = interrupt_response
-        self.semantic_vad_create_response = semantic_vad_create_response
-        self.enable_disconnect_tool = enable_disconnect_tool
-        self.transcription_language = transcription_language
-        self.transcription_model = transcription_model
-        self.instructions = instructions
-        self.model = openai_model
-        self.voice = openai_voice
-        self.openai_speed = openai_speed
-        self.max_output_tokens = max_output_tokens
-        self.noise_reduction = noise_reduction
-        self.mcp_tool_allowlist = mcp_tool_allowlist
-        self.mcp_client = mcp_client
-        self.enable_web_search = enable_web_search
-        self.web_search_model = web_search_model
-
-        # Initialize audio recording service (optional)
-        self.audio_recording_service = AudioRecordingService(
-            enable_recording=enable_recording,
-            sample_rate=24000,
-            chunk_duration_seconds=30,
-            output_dir="recordings"
-        )
-        
-        logger.info("✅ Application initialized - ready to accept WebSocket connections")
-    
-    def _build_pipeline_for_transport(self, transport: WebsocketServerTransport, client_id: str):
-        """
-        Build pipeline for a WebSocket transport connection.
-        
-        Args:
-            transport: The WebSocket transport instance
-            client_id: Unique identifier for the client device
-        """
-        # Ensure OpenAI service exists
-        if self.openai_service is None:
-            raise RuntimeError("OpenAI service must be created before building pipeline")
-        
-        # Use WebSocket handler to build pipeline
-        self.pipeline, self.runner, self.current_task = self.websocket_handler.build_pipeline(
+        # else is treate…2907 tokens truncated…f.pipeline, self.runner, self.current_task = self.websocket_handler.build_pipeline(
             transport=transport,
             openai_service=self.openai_service,
             client_id=client_id,
@@ -591,13 +373,13 @@ class Application:
         
         async with self._pipeline_lock:
             if client_id is None:
-                logger.warning("⚠️ No client_id provided to _ensure_openai_service")
+                logger.warning("âš ï¸ No client_id provided to _ensure_openai_service")
             
             # Create new session
             if client_id:
-                logger.info(f"🆕 Creating new OpenAI Session for Client {client_id}...")
+                logger.info(f"ðŸ†• Creating new OpenAI Session for Client {client_id}...")
             else:
-                logger.info("🆕 Creating new OpenAI Session...")
+                logger.info("ðŸ†• Creating new OpenAI Session...")
             
             # Cache context from old service before creating new one
             if client_id and self.openai_service is not None:
@@ -605,7 +387,7 @@ class Application:
                     self.session_manager.cleanup_before_new_session(client_id)
                     logger.debug(f"Cached context from previous session for client {client_id}")
                 except Exception as e:
-                    logger.warning(f"⚠️ Error caching context from old service for client {client_id}: {e}")
+                    logger.warning(f"âš ï¸ Error caching context from old service for client {client_id}: {e}")
             
             # Create session properties with audio configuration
             from pipecat.services.openai.realtime.events import (
@@ -636,12 +418,14 @@ class Application:
             all_tools.append(get_enrollment_tool_definition())
             all_tools.append(get_false_alarm_tool_definition())
             all_tools.extend(get_timer_tool_definitions())
+            if self.enable_openclaw_tools:
+                all_tools.extend(get_openclaw_tool_definitions())
 
             # Get MCP tool definitions if available
             mcp_tools_schema = None
             if self.mcp_client:
                 try:
-                    logger.info("🔧 Fetching MCP tool definitions...")
+                    logger.info("ðŸ”§ Fetching MCP tool definitions...")
                     mcp_tools_schema = await self.mcp_client.get_tools_schema()
                     
                     # Convert MCP tool schemas to OpenAI format, applying the
@@ -665,13 +449,13 @@ class Application:
                         exposed += 1
 
                     if self.mcp_tool_allowlist:
-                        logger.info(f"✅ Fetched {len(mcp_tools_schema.standard_tools)} MCP tools, exposing {exposed} per allow-list")
+                        logger.info(f"âœ… Fetched {len(mcp_tools_schema.standard_tools)} MCP tools, exposing {exposed} per allow-list")
                     else:
-                        logger.info(f"✅ Fetched {len(mcp_tools_schema.standard_tools)} MCP tools")
+                        logger.info(f"âœ… Fetched {len(mcp_tools_schema.standard_tools)} MCP tools")
                 except Exception as e:
-                    logger.warning(f"⚠️ Failed to fetch MCP tool definitions: {e}")
+                    logger.warning(f"âš ï¸ Failed to fetch MCP tool definitions: {e}")
             
-            # Turn detection: semantic_vad (recommended — semantic end-of-turn,
+            # Turn detection: semantic_vad (recommended â€” semantic end-of-turn,
             # echo-resistant, doesn't cut the user off) or classic server_vad.
             if self.turn_detection_type == "semantic_vad":
                 turn_detection = SemanticTurnDetection(
@@ -685,12 +469,12 @@ class Application:
                     # 2nd/3rd user turn therefore gets NO response unless the
                     # server makes it. We previously set this False to stop a
                     # turn-1 double-response (server + Pipecat first-context both
-                    # creating → `conversation_already_has_active_response`), but
+                    # creating â†’ `conversation_already_has_active_response`), but
                     # that silently broke every turn after the first (device hung
                     # in "thinking"). True is the correct trade: the server drives
                     # all user-turn responses; Pipecat still creates the post-tool
                     # response via _process_completed_function_calls. To stop the
-                    # turn-1 double (server + Pipecat-first-context both creating →
+                    # turn-1 double (server + Pipecat-first-context both creating â†’
                     # conversation_already_has_active_response), run() seeds
                     # self._context once at startup with a kickoff LLMRunFrame, so
                     # the user's first real turn hits the else-branch too.
@@ -744,19 +528,19 @@ class Application:
 
             if self.turn_detection_type == "semantic_vad":
                 logger.info(
-                    f"🎚️ Turn detection: semantic_vad (eagerness={self.vad_eagerness}, "
+                    f"ðŸŽšï¸ Turn detection: semantic_vad (eagerness={self.vad_eagerness}, "
                     f"create_response={self.semantic_vad_create_response}, "
                     f"interrupt_response={self.interrupt_response})"
                     + (f", transcription={self.transcription_model} (lang={self.transcription_language})" if self.transcription_language else " (transcription off)")
                 )
             else:
                 logger.info(
-                    f"🎚️ Turn detection: server_vad (threshold={self.vad_threshold}, "
+                    f"ðŸŽšï¸ Turn detection: server_vad (threshold={self.vad_threshold}, "
                     f"silence_duration_ms={self.vad_silence_duration_ms})"
                     + (f", transcription={self.transcription_model} (lang={self.transcription_language})" if self.transcription_language else " (transcription off)")
                 )
 
-            logger.info(f"🔧 Creating session with {len(all_tools)} tools: {[tool.get('name', 'unknown') for tool in all_tools]}")
+            logger.info(f"ðŸ”§ Creating session with {len(all_tools)} tools: {[tool.get('name', 'unknown') for tool in all_tools]}")
             
             # Create new service instance
             self.openai_service = SafeRealtimeLLMService(
@@ -765,13 +549,13 @@ class Application:
                 session_properties=session_properties,
                 start_audio_paused=False
             )
-            logger.info(f"✅ OpenAI Service created: {type(self.openai_service).__name__}")
+            logger.info(f"âœ… OpenAI Service created: {type(self.openai_service).__name__}")
             
             # Register disconnect tool handler (only when the tool is exposed)
             if self.enable_disconnect_tool:
                 disconnect_tool_handler = create_disconnect_tool_handler(self.websocket_transport)
                 self.openai_service.register_function("disconnect_client", disconnect_tool_handler)
-                logger.info("✅ Registered disconnect tool handler")
+                logger.info("âœ… Registered disconnect tool handler")
 
             # Register web search tool handler (only when the tool is exposed)
             if self.enable_web_search:
@@ -779,7 +563,7 @@ class Application:
                     "web_search",
                     create_web_search_tool_handler(self.openai_api_key, self.web_search_model),
                 )
-                logger.info(f"✅ Registered web_search tool handler (model={self.web_search_model})")
+                logger.info(f"âœ… Registered web_search tool handler (model={self.web_search_model})")
             
             # Register voice enrollment tool handler (fork). The speaker-name
             # getter lets the tool default to the voice-identified person.
@@ -792,26 +576,26 @@ class Application:
                 "voice_enrollment",
                 create_enrollment_tool_handler(self.enrollment_conductor, _current_speaker_name),
             )
-            logger.info("✅ Registered voice_enrollment tool handler")
+            logger.info("âœ… Registered voice_enrollment tool handler")
             self.openai_service.register_function(
                 "mark_false_wake", create_false_alarm_tool_handler()
             )
             register_timer_tools(self.openai_service, self.timer_registry)
-            logger.info("✅ Registered timer tools (set/cancel/list)")
+            logger.info("âœ… Registered timer tools (set/cancel/list)")
 
             # Register MCP tool handlers if available
             if self.mcp_client and mcp_tools_schema:
                 try:
                     await self.mcp_client.register_tools_schema(mcp_tools_schema, self.openai_service)
-                    logger.info(f"✅ Registered {len(mcp_tools_schema.standard_tools)} MCP tool handlers")
+                    logger.info(f"âœ… Registered {len(mcp_tools_schema.standard_tools)} MCP tool handlers")
                 except Exception as e:
-                    logger.warning(f"⚠️ Failed to register MCP tool handlers: {e}")
+                    logger.warning(f"âš ï¸ Failed to register MCP tool handlers: {e}")
             
             # Register service with session manager
             if client_id:
                 self.session_manager.set_current_service(client_id, self.openai_service)
             
-            logger.info("✅ New OpenAI Session created")
+            logger.info("âœ… New OpenAI Session created")
             return self.openai_service
     
     async def run(self) -> None:
@@ -825,15 +609,15 @@ class Application:
         # The transport manages multiple connections internally
         self._build_pipeline_for_transport(self.websocket_transport, "server")
 
-        # Consume pipecat's FIRST-context auto-response ONCE at startup — SILENTLY.
+        # Consume pipecat's FIRST-context auto-response ONCE at startup â€” SILENTLY.
         # WHY: pipecat 0.0.97's OpenAIRealtimeLLMService._handle_context does
-        # `if not self._context: ... await self._create_response()` — i.e. the
+        # `if not self._context: ... await self._create_response()` â€” i.e. the
         # very first context it ever sees triggers a real response. With
         # semantic_vad create_response=True the SERVER also creates a response on
-        # every user turn, so the user's first turn would double-create →
+        # every user turn, so the user's first turn would double-create â†’
         # `conversation_already_has_active_response` (cut turn 1 short, hung
         # turn 2). We previously consumed that path with a throwaway LLMRunFrame
-        # kickoff — but an LLMRunFrame runs `_create_response()`, producing a REAL
+        # kickoff â€” but an LLMRunFrame runs `_create_response()`, producing a REAL
         # (audible, tool-calling) reply. The old comment assumed it "goes to no
         # device" because nothing is connected at startup; WRONG: when the user
         # updates the add-on the device auto-reconnects within seconds and lands
@@ -844,7 +628,7 @@ class Application:
         # Fix: pre-set `self._context` to an empty LLMContext instead. Now the
         # first REAL user turn hits the ELSE branch of _handle_context (no
         # _create_response), the server creates that turn's response (semantic_vad
-        # create_response=True), and there's no double — AND no startup speech.
+        # create_response=True), and there's no double â€” AND no startup speech.
         # The empty sentinel is harmlessly overwritten by the real context on the
         # first turn (both branches do `self._context = context`).
         if self.turn_detection_type == "semantic_vad" and self.semantic_vad_create_response:
@@ -858,7 +642,7 @@ class Application:
                     # events, then flips _llm_needs_conversation_setup False. On a
                     # fresh realtime session OpenAI already builds the conversation
                     # from the live audio + tool-call flow, so that one-time setup
-                    # re-injects items OpenAI already has — which made the first
+                    # re-injects items OpenAI already has â€” which made the first
                     # post-tool reply come out as a meaningless filler ("Ik ben
                     # klaar om verder te gaan met het gesprek."). Instructions are
                     # sent independently via _update_settings() on session.created,
@@ -866,11 +650,11 @@ class Application:
                     # normal reply.
                     if hasattr(self.openai_service, "_llm_needs_conversation_setup"):
                         self.openai_service._llm_needs_conversation_setup = False
-                    logger.info("🌱 Pre-seeded empty context + marked conversation setup done (no startup speech, no first-turn filler)")
+                    logger.info("ðŸŒ± Pre-seeded empty context + marked conversation setup done (no startup speech, no first-turn filler)")
                 else:
-                    logger.info("🌱 Startup context already set; skipping pre-seed")
+                    logger.info("ðŸŒ± Startup context already set; skipping pre-seed")
             except Exception as e:
-                logger.warning(f"⚠️ Could not pre-seed startup context (turn-1 double may occur): {e}")
+                logger.warning(f"âš ï¸ Could not pre-seed startup context (turn-1 double may occur): {e}")
 
         # Setup WebSocket event handlers
         async def on_client_connected(client_id: str):
@@ -903,7 +687,7 @@ class Application:
         try:
             # Start the pipeline runner - this will start the WebSocket server
             # Based on pipecat-examples: PipelineRunner.run() starts the transport server
-            logger.info("✅ Starting WebSocket server and pipeline...")
+            logger.info("âœ… Starting WebSocket server and pipeline...")
             await self.runner.run(self.current_task)
         except KeyboardInterrupt:
             logger.info("Received keyboard interrupt")
@@ -921,18 +705,18 @@ class Application:
             try:
                 await self.runner.cancel()
             except Exception as e:
-                logger.warning(f"⚠️ Error cancelling runner: {e}")
+                logger.warning(f"âš ï¸ Error cancelling runner: {e}")
         
         if self.websocket_handler:
             try:
                 await self.websocket_handler.cleanup()
             except Exception as e:
-                logger.warning(f"⚠️ Error cleaning up WebSocket handler: {e}")
+                logger.warning(f"âš ï¸ Error cleaning up WebSocket handler: {e}")
         
         if self.audio_recording_service:
             self.audio_recording_service.cleanup()
         
-        logger.info("✅ Application cleanup complete")
+        logger.info("âœ… Application cleanup complete")
 
 
 async def main() -> None:
@@ -950,3 +734,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+
