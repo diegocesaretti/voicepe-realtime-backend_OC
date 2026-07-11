@@ -75,6 +75,7 @@ def pcm16_mono_bytes(indata: np.ndarray) -> bytes:
 class ClientState:
     mic_open: bool
     continuous: bool = False
+    enrolling: bool = False
     quit_requested: bool = False
     phase: str = "idle"
     reply_seen: bool = False
@@ -195,7 +196,7 @@ async def audio_sender(ws, audio: AudioIO, state: ClientState, stop_event: async
 async def follow_up_window(state: ClientState) -> None:
     if state.follow_up_open_delay_ms > 0:
         await asyncio.sleep(state.follow_up_open_delay_ms / 1000)
-    if state.quit_requested or state.phase != "idle":
+    if state.quit_requested or state.phase != "idle" or state.enrolling:
         return
     state.mic_open = True
     print("follow-up listening...")
@@ -235,19 +236,32 @@ async def receiver(ws, audio: AudioIO, state: ClientState, stop_event: asyncio.E
             phase = data.get("value")
             state.phase = str(phase)
             print(f"phase: {phase}")
-            if phase in {"thinking", "replying"}:
+            if phase in {"thinking", "replying"} and not state.enrolling:
                 state.mic_open = False
             if phase == "replying":
                 state.reply_seen = True
                 audio.clear_output()
             if phase == "idle" and not state.quit_requested:
-                if state.continuous:
+                if state.enrolling:
+                    state.mic_open = True
+                elif state.continuous:
                     state.mic_open = True
                 elif state.reply_seen and state.follow_up_ms > 0 and not args.no_follow_up:
                     state.reply_seen = False
                     asyncio.create_task(follow_up_window(state))
                 else:
                     state.mic_open = False
+        elif msg_type == "enroll":
+            mode = data.get("mode")
+            print(f"enroll mode: {mode}")
+            if mode == "start":
+                state.enrolling = True
+                state.mic_open = True
+                state.reply_seen = False
+                audio.clear_output()
+            elif mode == "stop":
+                state.enrolling = False
+                state.mic_open = state.continuous
         elif msg_type == "pong":
             pass
         elif msg_type == "ack":
@@ -258,6 +272,8 @@ async def receiver(ws, audio: AudioIO, state: ClientState, stop_event: asyncio.E
 
 
 async def trigger_wake(ws, audio: AudioIO, state: ClientState, args) -> None:
+    if state.enrolling:
+        return
     state.mic_open = False
     audio.clear_output()
     if state.phase == "replying":
@@ -327,6 +343,8 @@ async def wake_word_loop(ws, audio: AudioIO, state: ClientState, stop_event: asy
         try:
             chunk = await asyncio.to_thread(audio.wake_queue.get, True, 0.1)
         except queue.Empty:
+            continue
+        if state.enrolling:
             continue
         samples = np.frombuffer(chunk, dtype=np.int16)
         scores = await asyncio.to_thread(model.predict, samples)
@@ -469,6 +487,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 
