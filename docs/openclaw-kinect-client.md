@@ -44,7 +44,7 @@ List audio devices:
 
 On Diego's PC the Kinect was observed as:
 
-- `Varios micrÃƒÆ’Ã‚Â³fonos (Kinect USB Audio)`
+- `Varios micrÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³fonos (Kinect USB Audio)`
 - WASAPI index varies by Windows boot/audio state; observed values include `9`
   and `14`
 - 4 input channels
@@ -83,6 +83,15 @@ By default the client plays a short local wake confirmation tone before opening
 the mic. Disable it with `--no-wake-sound`, or tune it with
 `--wake-sound-frequency`, `--wake-sound-ms`, and `--wake-open-delay-ms`.
 
+Follow-up is enabled by default using the backend `hello` values: after the
+assistant finishes replying, the client reopens the mic briefly so you can answer
+without repeating the wake word. Disable it with `--no-follow-up`, or override
+with `--follow-up-ms` and `--follow-up-open-delay-ms`.
+
+Safe barge-in is handled by wake word: if `hey_jarvis` is detected while the
+assistant is replying, the client sends `interrupt`, clears local playback, plays
+the wake confirmation tone, then opens the mic for the new command.
+
 For continuous testing:
 
 ```powershell
@@ -98,6 +107,7 @@ For continuous testing:
    add-on `/share` paths when running outside Home Assistant.
 4. Add a Windows service or OpenClaw-managed process wrapper after the voice
    loop is stable.
+
 
 
 
