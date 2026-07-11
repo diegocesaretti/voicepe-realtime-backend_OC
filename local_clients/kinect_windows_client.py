@@ -133,6 +133,16 @@ class AudioIO:
                 break
         self._output_buffer.clear()
 
+    def enqueue_tone(self, frequency_hz: float, duration_ms: int, volume: float = 0.25) -> None:
+        frames = max(1, int(BACKEND_OUTPUT_SAMPLE_RATE * duration_ms / 1000))
+        t = np.arange(frames, dtype=np.float32) / BACKEND_OUTPUT_SAMPLE_RATE
+        tone = np.sin(2.0 * np.pi * frequency_hz * t)
+        pcm = np.clip(tone * 32767.0 * volume, -32768, 32767).astype(np.int16).tobytes()
+        try:
+            self.output_queue.put_nowait(pcm)
+        except queue.Full:
+            pass
+
     def _input_callback(self, indata, _frame_count, _time_info, status) -> None:
         if status:
             print(f"input status: {status}", file=sys.stderr)
@@ -214,10 +224,20 @@ async def receiver(ws, audio: AudioIO, state: ClientState, stop_event: asyncio.E
     stop_event.set()
 
 
-async def keyboard_loop(ws, audio: AudioIO, state: ClientState, stop_event: asyncio.Event, open_mic: bool) -> None:
-    if open_mic:
-        state.mic_open = True
-        await send_json(ws, {"type": "wake"})
+async def trigger_wake(ws, audio: AudioIO, state: ClientState, args) -> None:
+    state.mic_open = False
+    audio.clear_output()
+    if args.wake_sound:
+        audio.enqueue_tone(args.wake_sound_frequency, args.wake_sound_ms)
+    await send_json(ws, {"type": "wake"})
+    if args.wake_open_delay_ms > 0:
+        await asyncio.sleep(args.wake_open_delay_ms / 1000)
+    state.mic_open = True
+
+
+async def keyboard_loop(ws, audio: AudioIO, state: ClientState, stop_event: asyncio.Event, args) -> None:
+    if args.open_mic:
+        await trigger_wake(ws, audio, state, args)
         print("Open mic mode. Press Ctrl+C to stop.")
         while not stop_event.is_set():
             await asyncio.sleep(0.5)
@@ -235,8 +255,7 @@ async def keyboard_loop(ws, audio: AudioIO, state: ClientState, stop_event: asyn
             audio.clear_output()
             await send_json(ws, {"type": "interrupt"})
             continue
-        state.mic_open = True
-        await send_json(ws, {"type": "wake"})
+        await trigger_wake(ws, audio, state, args)
         print("listening...")
 
 
@@ -281,8 +300,7 @@ async def wake_word_loop(ws, audio: AudioIO, state: ClientState, stop_event: asy
         if score >= args.wake_threshold and now - last_wake >= args.wake_cooldown_seconds:
             last_wake = now
             if not state.mic_open:
-                state.mic_open = True
-                await send_json(ws, {"type": "wake"})
+                await trigger_wake(ws, audio, state, args)
                 print(f"wake detected ({score:.2f}); listening...")
 
 
@@ -331,7 +349,7 @@ async def run_client(args) -> None:
             if args.wake_word:
                 tasks.append(wake_word_loop(ws, audio, state, stop_event, args))
             else:
-                tasks.append(keyboard_loop(ws, audio, state, stop_event, args.open_mic))
+                tasks.append(keyboard_loop(ws, audio, state, stop_event, args))
             await asyncio.gather(*tasks)
         finally:
             audio.close()
@@ -388,6 +406,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wake-threshold", type=float, default=0.39)
     parser.add_argument("--wake-cooldown-seconds", type=float, default=2.0)
     parser.add_argument("--wake-inference-framework", choices=("onnx", "tflite"), default="onnx")
+    parser.add_argument("--wake-sound", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--wake-sound-frequency", type=float, default=880.0)
+    parser.add_argument("--wake-sound-ms", type=int, default=120)
+    parser.add_argument("--wake-open-delay-ms", type=int, default=700)
     return parser.parse_args()
 
 
@@ -404,6 +426,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 
