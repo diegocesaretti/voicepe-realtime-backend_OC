@@ -28,14 +28,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-ENROLL_DIR = "/share/voice-enrollment"
+ENROLL_DIR = os.environ.get("ENROLL_DIR", "/share/voice-enrollment")
+PROMPT_CACHE_DIR = os.environ.get("ENROLL_PROMPT_CACHE_DIR", "/data/enroll_prompts")
 
 
 async def _set_wake_sound(on: bool) -> None:
     """Toggle the device's wake-chime switch during enrollment (best effort).
 
     The chime otherwise plays over the guidance every time a wake-phrase
-    repetition re-wakes the device (observed live — made instructions
+    repetition re-wakes the device (observed live â€” made instructions
     inaudible). Entity id comes from the WAKE_SOUND_ENTITY option; empty = skip.
     """
     entity = os.environ.get("WAKE_SOUND_ENTITY", "").strip()
@@ -50,9 +51,9 @@ async def _set_wake_sound(on: bool) -> None:
                 json={"entity_id": entity},
             )
             r.raise_for_status()
-        logger.info(f"🔔 wake sound {'restored' if on else 'muted'} ({entity})")
+        logger.info(f"ðŸ”” wake sound {'restored' if on else 'muted'} ({entity})")
     except Exception as e:
-        logger.warning(f"⚠️ could not toggle wake sound {entity}: {e!r}")
+        logger.warning(f"âš ï¸ could not toggle wake sound {entity}: {e!r}")
 SAMPLE_RATE = 16000
 MAX_SESSION_SECONDS = 15 * 60  # hard stop so a forgotten session can't record forever
 
@@ -84,7 +85,7 @@ class EnrollmentRecorder:
         self.person = safe
         self.path = path
         self._started_at = time.monotonic()
-        logger.info(f"🎓 voice enrollment started for '{safe}' → {path}")
+        logger.info(f"ðŸŽ“ voice enrollment started for '{safe}' â†’ {path}")
         try:
             import asyncio as _a
             from .ha_sensors import PUBLISHER
@@ -97,13 +98,13 @@ class EnrollmentRecorder:
         if self._wav is None:
             return
         if time.monotonic() - self._started_at > MAX_SESSION_SECONDS:
-            logger.warning("🎓 enrollment hit the 15-minute safety cap — stopping")
+            logger.warning("ðŸŽ“ enrollment hit the 15-minute safety cap â€” stopping")
             self.stop()
             return
         try:
             self._wav.writeframes(pcm)
         except Exception as e:
-            logger.warning(f"⚠️ enrollment write failed, stopping: {e!r}")
+            logger.warning(f"âš ï¸ enrollment write failed, stopping: {e!r}")
             self.stop()
 
     def stop(self) -> Dict[str, Any]:
@@ -115,10 +116,10 @@ class EnrollmentRecorder:
                 info["seconds"] = round(frames / SAMPLE_RATE, 1)
                 w.close()
             except Exception as e:
-                logger.warning(f"⚠️ enrollment close failed: {e!r}")
+                logger.warning(f"âš ï¸ enrollment close failed: {e!r}")
         if info["path"]:
             logger.info(
-                f"🎓 voice enrollment stopped for '{info['person']}' — "
+                f"ðŸŽ“ voice enrollment stopped for '{info['person']}' â€” "
                 f"{info['seconds']}s captured at {info['path']}"
             )
         self.person = None
@@ -140,7 +141,7 @@ def get_false_alarm_tool_definition() -> Dict[str, Any]:
         "name": "mark_false_wake",
         "description": (
             "Mark the most recent wake as a FALSE trigger. Use when the user says "
-            "the device woke by mistake — e.g. 'that was a false alarm', 'nobody "
+            "the device woke by mistake â€” e.g. 'that was a false alarm', 'nobody "
             "called you', 'you weren't being spoken to'. Confirms in one short "
             "sentence; no apology beyond that."
         ),
@@ -162,7 +163,7 @@ def create_false_alarm_tool_handler() -> Callable[["FunctionCallParams"], Awaita
             latest = files[-1]
             marked = latest.replace("probe_", "falsewake_", 1)
             os.rename(os.path.join(probes_dir, latest), os.path.join(probes_dir, marked))
-            logger.info(f"🏷️ marked false wake: {marked}")
+            logger.info(f"ðŸ·ï¸ marked false wake: {marked}")
             try:
                 from .ha_sensors import PUBLISHER
                 await PUBLISHER.false_wake()
@@ -172,7 +173,7 @@ def create_false_alarm_tool_handler() -> Callable[["FunctionCallParams"], Awaita
                 {"status": "marked", "note": "Logged as a false trigger for retraining. Confirm briefly."}
             )
         except Exception as e:
-            logger.error(f"❌ mark_false_wake failed: {e}", exc_info=True)
+            logger.error(f"âŒ mark_false_wake failed: {e}", exc_info=True)
             await params.result_callback({"error": "could not mark it; say so briefly"})
 
     return false_alarm_handler
@@ -187,7 +188,7 @@ def get_enrollment_tool_definition() -> Dict[str, Any]:
             "for a household member. Use when someone asks to train, teach, or "
             "enroll their voice (e.g. 'teach the assistant my voice', 'voice "
             "training', 'continue voice training'). Call start IMMEDIATELY and "
-            "WITHOUT a person name — the system identifies the speaker by voice "
+            "WITHOUT a person name â€” the system identifies the speaker by voice "
             "automatically (never ask who is enrolling unless the tool says it "
             "could not identify them, or they are enrolling someone else). Then "
             "follow the returned protocol exactly. Recording captures everything "
@@ -231,7 +232,7 @@ def create_enrollment_tool_handler(
                     return
                 if not person and get_speaker_name is not None:
                     # The voice verdict races this tool call (the probe needs
-                    # ~3 s of mic audio) — wait for it briefly instead of asking
+                    # ~3 s of mic audio) â€” wait for it briefly instead of asking
                     # a question the VAD tends to drop.
                     for _ in range(12):  # up to ~6 s
                         person = (get_speaker_name() or "").strip()
@@ -242,7 +243,7 @@ def create_enrollment_tool_handler(
                     await params.result_callback(
                         {"error": (
                             "Could not identify the speaker by voice. Ask for their "
-                            "first name, then call start again with person set — and "
+                            "first name, then call start again with person set â€” and "
                             "tell them to answer promptly."
                         )}
                     )
@@ -252,7 +253,7 @@ def create_enrollment_tool_handler(
                 await params.result_callback(
                     {"status": "guided session running on the device",
                      "instructions": (
-                         "An automated audio coach now guides them directly — you are "
+                         "An automated audio coach now guides them directly â€” you are "
                          "NOT involved. Say one very short acknowledgment (a few "
                          "words), then output NOTHING further: no commentary, no "
                          "questions, no tool calls, until this tool reports again."
@@ -272,7 +273,7 @@ def create_enrollment_tool_handler(
             else:
                 await params.result_callback({"error": f"unknown action '{action}'"})
         except Exception as e:
-            logger.error(f"❌ voice_enrollment failed: {e}", exc_info=True)
+            logger.error(f"âŒ voice_enrollment failed: {e}", exc_info=True)
             try:
                 await conductor.stop()
                 await _set_wake_sound(True)
@@ -312,11 +313,11 @@ class EnrollmentConductor:
         return self._task is not None and not self._task.done()
 
     async def _tts(self, text):
-        """Synthesize one prompt to 24 kHz mono PCM16, cached in /data."""
+        """Synthesize one prompt to 24 kHz mono PCM16, cached locally."""
         import hashlib
-        os.makedirs("/data/enroll_prompts", exist_ok=True)
+        os.makedirs(PROMPT_CACHE_DIR, exist_ok=True)
         key = hashlib.md5(f"{self.tts_voice}:{text}".encode()).hexdigest()
-        path = f"/data/enroll_prompts/{key}.pcm"
+        path = os.path.join(PROMPT_CACHE_DIR, f"{key}.pcm")
         if os.path.exists(path) and os.path.getsize(path) > 0:
             with open(path, "rb") as f:
                 return f.read()
@@ -401,10 +402,11 @@ class EnrollmentConductor:
             await self._say("That's everything. Session complete. Thank you.")
             await asyncio.sleep(2)
             await self._finish()
-            logger.info("🎓 enrollment conductor finished normally")
+            logger.info("ðŸŽ“ enrollment conductor finished normally")
         except asyncio.CancelledError:
-            logger.info("🎓 enrollment conductor cancelled")
+            logger.info("ðŸŽ“ enrollment conductor cancelled")
             raise
         except Exception as e:
-            logger.error(f"❌ enrollment conductor failed: {e}", exc_info=True)
+            logger.error(f"âŒ enrollment conductor failed: {e}", exc_info=True)
             await self._finish()
+
