@@ -54,3 +54,38 @@ existing Python client in one of two ways:
 Do not replace `local_clients/kinect_windows_client.py` until the SDK path has
 proved that beamforming improves Diego's room.
 
+## Python Client Integration
+
+The normal Python client can read SDK audio from this bridge:
+
+```powershell
+.venv-backend\Scripts\python.exe local_clients\kinect_windows_client.py `
+  --input-backend kinect-sdk `
+  --output-device Altavoces `
+  --wake-word
+```
+
+Or run the wrapper:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_kinect_sdk_client_windows.ps1
+```
+
+This keeps the existing Python logic for:
+
+- openWakeWord wake detection;
+- backend websocket protocol;
+- wake tone;
+- follow-up listening;
+- barge-in;
+- Windows speaker playback.
+
+## First Live Result
+
+On 2026-07-12 the SDK path successfully connected to the backend, detected
+`hey jarvis`, transcribed live Spanish speech, and received assistant replies.
+The SDK also emitted changing beam/source angle metadata while Diego spoke.
+
+Keep the PortAudio client as the default Windows auto-start path until the SDK
+path is tested for a longer period in the room.
+
