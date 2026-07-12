@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Drawing;
+using System.Drawing.Imaging;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 using Microsoft.Kinect;
 
@@ -40,6 +43,15 @@ namespace OpenClaw.KinectSdkAudioBridge
 
             try
             {
+                SnapshotWriter snapshotWriter = null;
+                if (!String.IsNullOrWhiteSpace(options.SnapshotDir))
+                {
+                    snapshotWriter = new SnapshotWriter(options.SnapshotDir, options.SnapshotIntervalMs);
+                    sensor.ColorStream.Enable(ColorImageFormat.RgbResolution640x480Fps30);
+                    sensor.ColorFrameReady += snapshotWriter.OnColorFrameReady;
+                    Console.Error.WriteLine("Kinect RGB snapshots enabled: dir={0}", options.SnapshotDir);
+                }
+
                 sensor.Start();
                 ConfigureAudio(sensor.AudioSource, options);
 
@@ -112,6 +124,11 @@ namespace OpenClaw.KinectSdkAudioBridge
                 }
 
                 sensor.AudioSource.Stop();
+                if (snapshotWriter != null)
+                {
+                    sensor.ColorFrameReady -= snapshotWriter.OnColorFrameReady;
+                    snapshotWriter.Dispose();
+                }
                 sensor.Stop();
                 Console.Error.WriteLine("Kinect SDK audio stopped.");
                 return 0;
@@ -221,6 +238,8 @@ namespace OpenClaw.KinectSdkAudioBridge
             public bool AutomaticGainControl { get; private set; }
             public bool LogReads { get; private set; }
             public double? ManualBeamAngle { get; private set; }
+            public string SnapshotDir { get; private set; }
+            public int SnapshotIntervalMs { get; private set; }
 
             private Options()
             {
@@ -229,6 +248,7 @@ namespace OpenClaw.KinectSdkAudioBridge
                 BufferBytes = 3200;
                 NoiseSuppression = true;
                 AutomaticGainControl = false;
+                SnapshotIntervalMs = 1000;
             }
 
             public static Options Parse(string[] args)
@@ -268,6 +288,12 @@ namespace OpenClaw.KinectSdkAudioBridge
                         case "--manual-beam-angle":
                             options.ManualBeamAngle = Double.Parse(RequireValue(arg, queue), CultureInfo.InvariantCulture);
                             break;
+                        case "--snapshot-dir":
+                            options.SnapshotDir = RequireValue(arg, queue);
+                            break;
+                        case "--snapshot-interval-ms":
+                            options.SnapshotIntervalMs = Int32.Parse(RequireValue(arg, queue), CultureInfo.InvariantCulture);
+                            break;
                         default:
                             throw new ArgumentException("Unknown argument: " + arg);
                     }
@@ -288,6 +314,8 @@ namespace OpenClaw.KinectSdkAudioBridge
                 Console.WriteLine("  --agc                         Enable Kinect automatic gain control.");
                 Console.WriteLine("  --no-noise-suppression        Disable Kinect noise suppression.");
                 Console.WriteLine("  --log-reads                   Log read sizes and timing to stderr.");
+                Console.WriteLine("  --snapshot-dir <path>         Save latest Kinect RGB snapshot as latest.jpg.");
+                Console.WriteLine("  --snapshot-interval-ms <ms>   Minimum time between RGB snapshot writes.");
             }
 
             private static string RequireValue(string arg, Queue<string> queue)
@@ -299,6 +327,82 @@ namespace OpenClaw.KinectSdkAudioBridge
 
                 return queue.Dequeue();
             }
+        }
+    }
+
+    internal sealed class SnapshotWriter : IDisposable
+    {
+        private readonly string _dir;
+        private readonly int _intervalMs;
+        private readonly object _lock = new object();
+        private DateTime _lastWriteUtc = DateTime.MinValue;
+
+        public SnapshotWriter(string dir, int intervalMs)
+        {
+            _dir = dir;
+            _intervalMs = Math.Max(100, intervalMs);
+            Directory.CreateDirectory(_dir);
+        }
+
+        public void OnColorFrameReady(object sender, ColorImageFrameReadyEventArgs eventArgs)
+        {
+            var now = DateTime.UtcNow;
+            if ((now - _lastWriteUtc).TotalMilliseconds < _intervalMs)
+            {
+                return;
+            }
+
+            lock (_lock)
+            {
+                now = DateTime.UtcNow;
+                if ((now - _lastWriteUtc).TotalMilliseconds < _intervalMs)
+                {
+                    return;
+                }
+
+                using (var frame = eventArgs.OpenColorImageFrame())
+                {
+                    if (frame == null)
+                    {
+                        return;
+                    }
+
+                    var pixels = new byte[frame.PixelDataLength];
+                    frame.CopyPixelDataTo(pixels);
+                    SaveJpeg(pixels, frame.Width, frame.Height);
+                    _lastWriteUtc = now;
+                }
+            }
+        }
+
+        public void Dispose()
+        {
+        }
+
+        private void SaveJpeg(byte[] pixels, int width, int height)
+        {
+            var latest = Path.Combine(_dir, "latest.jpg");
+            var temp = Path.Combine(_dir, "latest.tmp.jpg");
+            using (var bitmap = new Bitmap(width, height, PixelFormat.Format32bppRgb))
+            {
+                var rect = new Rectangle(0, 0, width, height);
+                var data = bitmap.LockBits(rect, ImageLockMode.WriteOnly, bitmap.PixelFormat);
+                try
+                {
+                    Marshal.Copy(pixels, 0, data.Scan0, Math.Min(pixels.Length, Math.Abs(data.Stride) * height));
+                }
+                finally
+                {
+                    bitmap.UnlockBits(data);
+                }
+                bitmap.Save(temp, ImageFormat.Jpeg);
+            }
+
+            if (File.Exists(latest))
+            {
+                File.Delete(latest);
+            }
+            File.Move(temp, latest);
         }
     }
 
