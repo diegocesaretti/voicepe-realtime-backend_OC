@@ -34,3 +34,16 @@ Kinect USB Audio -> local_clients/kinect_windows_client.py -> backend websocket 
 - Consider a fixed speaker output configuration for Cocina later, either Windows Bluetooth output or a cast/TTS path.
 - Keep the SDK beamforming experiment on a separate branch until it proves better than the current PortAudio path.
 
+## SDK Branch Status
+
+Branch `kinect-sdk-audio` now has a working experimental path:
+
+```text
+Kinect SDK v1.8 bridge stdout PCM -> Python client --input-backend kinect-sdk -> backend websocket
+```
+
+First live test on 2026-07-12 succeeded: the SDK path detected `hey jarvis`,
+sent audio to the backend, transcribed Spanish speech, and received assistant
+replies. Keep the PortAudio path as the default auto-start target until the SDK
+path is tested longer for wake reliability, latency, and speaker playback.
+
