@@ -24,6 +24,7 @@ $OutExe = Join-Path $OutDir "OpenClaw.KinectSdkAudioBridge.exe"
     /platform:x64 `
     "/out:$OutExe" `
     /reference:$KinectDll `
+    /reference:System.Drawing.dll `
     (Join-Path $Root "Program.cs")
 
 if ($LASTEXITCODE -ne 0) {
