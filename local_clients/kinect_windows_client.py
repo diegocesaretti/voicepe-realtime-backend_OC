@@ -94,6 +94,7 @@ class AudioIO:
         input_channels: int,
         input_backend: str = "portaudio",
         sdk_bridge_exe: str | None = None,
+        sdk_snapshot_dir: str | None = None,
     ):
         self.input_device = input_device
         self.output_device = output_device
@@ -101,6 +102,7 @@ class AudioIO:
         self.input_channels = input_channels
         self.input_backend = input_backend
         self.sdk_bridge_exe = sdk_bridge_exe
+        self.sdk_snapshot_dir = sdk_snapshot_dir
         self.input_queue: queue.Queue[bytes] = queue.Queue(maxsize=100)
         self.wake_queue: queue.Queue[bytes] = queue.Queue(maxsize=100)
         self.output_queue: queue.Queue[bytes] = queue.Queue(maxsize=100)
@@ -190,8 +192,11 @@ class AudioIO:
         exe = Path(self.sdk_bridge_exe)
         if not exe.exists():
             raise RuntimeError(f"Kinect SDK bridge not found: {exe}")
+        command = [str(exe), "--stdout-pcm", "--probe-seconds", "0"]
+        if self.sdk_snapshot_dir:
+            command.extend(["--snapshot-dir", self.sdk_snapshot_dir])
         self.sdk_process = subprocess.Popen(
-            [str(exe), "--stdout-pcm", "--probe-seconds", "0"],
+            command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -450,6 +455,7 @@ async def run_client(args) -> None:
         input_channels=input_channels,
         input_backend=args.input_backend,
         sdk_bridge_exe=sdk_bridge_exe,
+        sdk_snapshot_dir=args.sdk_snapshot_dir,
     )
     state = ClientState(mic_open=args.open_mic, continuous=args.open_mic)
     stop_event = asyncio.Event()
@@ -498,6 +504,7 @@ async def dry_run_audio(args) -> None:
             input_channels=1,
             input_backend="kinect-sdk",
             sdk_bridge_exe=sdk_bridge_exe,
+            sdk_snapshot_dir=args.sdk_snapshot_dir,
         )
         frames = 0
         started = time.monotonic()
@@ -558,6 +565,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ws-url", default=DEFAULT_WS_URL)
     parser.add_argument("--input-backend", choices=("portaudio", "kinect-sdk"), default="portaudio")
     parser.add_argument("--sdk-bridge-exe", help="Path to OpenClaw.KinectSdkAudioBridge.exe")
+    parser.add_argument("--sdk-snapshot-dir", help="Directory where the Kinect SDK bridge writes latest.jpg")
     parser.add_argument("--input-device", default="Kinect")
     parser.add_argument("--output-device")
     parser.add_argument("--input-sample-rate", type=int, default=DEFAULT_INPUT_SAMPLE_RATE)
