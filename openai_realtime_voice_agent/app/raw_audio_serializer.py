@@ -51,6 +51,7 @@ class RawAudioSerializer(FrameSerializer):
         # Resets the dangling-VAD guard's "speech since wake" tracker. Set by
         # WebSocketHandler.build_pipeline.
         self._on_wake = None
+        self._on_vision_context = None
         self._speaker_probe = None
         self._enrollment_recorder = None
         self._on_enroll_stopped = None
@@ -84,6 +85,10 @@ class RawAudioSerializer(FrameSerializer):
     def set_wake_handler(self, handler):
         """Register the async no-arg callback fired on a device 'wake'."""
         self._on_wake = handler
+
+    def set_vision_context_handler(self, handler):
+        """Register async callback fired when a client sends wake visual context."""
+        self._on_vision_context = handler
 
     def set_speaker_probe(self, probe):
         """Register a SpeakerProbe: gets start_capture() on wake and feed() for
@@ -225,6 +230,14 @@ class RawAudioSerializer(FrameSerializer):
                         await self._on_wake()
                     except Exception as e:
                         logger.warning(f"⚠️ device wake handler failed: {e!r}")
+            elif isinstance(data, dict) and data.get("type") == "vision_context":
+                text = str(data.get("text") or "").strip()
+                image_path = str(data.get("image_path") or "").strip()
+                if text and self._on_vision_context is not None:
+                    try:
+                        await self._on_vision_context(text, image_path)
+                    except Exception as e:
+                        logger.warning(f"⚠️ vision-context handler failed: {e!r}")
             # interrupt / ping / start / other control frames: nothing to inject.
             return None
 
