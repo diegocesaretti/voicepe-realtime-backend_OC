@@ -28,5 +28,6 @@ $env:INSTRUCTIONS = "Sos Jarvis, asistente personal y de BWA 3D de Diego. HablÃ
 
 Set-Location $AppDir
 $ErrorActionPreference = "Continue"
-& $Python -m app.main *> (Join-Path $LogDir "backend.combined.log")
+$LogPath = Join-Path $LogDir "backend.combined.log"
+cmd.exe /c "`"$Python`" -m app.main > `"$LogPath`" 2>&1"
 
