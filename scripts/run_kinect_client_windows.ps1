@@ -9,5 +9,5 @@ Set-Location $Repo
 
 $ErrorActionPreference = "Continue"
 $LogPath = Join-Path $LogDir "kinect-client.combined.log"
-cmd.exe /c "`"$Python`" -u local_clients\kinect_windows_client.py --input-device Kinect --ws-url ws://127.0.0.1:8080/ --wake-word > `"$LogPath`" 2>&1"
+cmd.exe /c "`"$Python`" -u local_clients\kinect_windows_client.py --input-device Kinect --output-device Altavoces --ws-url ws://127.0.0.1:8080/ --wake-word --wake-sound-ms 220 > `"$LogPath`" 2>&1"
 
