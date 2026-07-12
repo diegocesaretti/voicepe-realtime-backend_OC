@@ -57,11 +57,25 @@ namespace OpenClaw.KinectSdkAudioBridge
                         sensor.AudioSource.AutomaticGainControlEnabled);
 
                     var started = DateTime.UtcNow;
+                    var lastReadUtc = started;
+                    var totalBytes = 0L;
+                    var readCount = 0L;
+                    var targetBytes = options.ProbeSeconds > 0
+                        ? (long)SampleRate * Channels * (BitsPerSample / 8) * options.ProbeSeconds
+                        : 0L;
+                    var maxWallSeconds = options.ProbeSeconds > 0
+                        ? Math.Max(options.ProbeSeconds * 4, options.ProbeSeconds + 10)
+                        : 0;
                     var buffer = new byte[options.BufferBytes];
                     while (!_stopRequested)
                     {
-                        if (options.ProbeSeconds > 0 &&
-                            (DateTime.UtcNow - started).TotalSeconds >= options.ProbeSeconds)
+                        var elapsed = (DateTime.UtcNow - started).TotalSeconds;
+                        if (targetBytes > 0 && totalBytes >= targetBytes)
+                        {
+                            break;
+                        }
+
+                        if (maxWallSeconds > 0 && elapsed >= maxWallSeconds)
                         {
                             break;
                         }
@@ -74,7 +88,27 @@ namespace OpenClaw.KinectSdkAudioBridge
                         }
 
                         output.Write(buffer, 0, read);
+                        totalBytes += read;
+                        readCount++;
+                        if (options.LogReads)
+                        {
+                            var now = DateTime.UtcNow;
+                            Console.Error.WriteLine(
+                                "read bytes={0} dt_ms={1:0.0} total_bytes={2} audio_seconds={3:0.000}",
+                                read,
+                                (now - lastReadUtc).TotalMilliseconds,
+                                totalBytes,
+                                totalBytes / (double)(SampleRate * Channels * (BitsPerSample / 8)));
+                            lastReadUtc = now;
+                        }
                     }
+
+                    Console.Error.WriteLine(
+                        "capture stats: reads={0} bytes={1} audio_seconds={2:0.000} wall_seconds={3:0.000}",
+                        readCount,
+                        totalBytes,
+                        totalBytes / (double)(SampleRate * Channels * (BitsPerSample / 8)),
+                        (DateTime.UtcNow - started).TotalSeconds);
                 }
 
                 sensor.AudioSource.Stop();
@@ -185,6 +219,7 @@ namespace OpenClaw.KinectSdkAudioBridge
             public int BufferBytes { get; private set; }
             public bool NoiseSuppression { get; private set; }
             public bool AutomaticGainControl { get; private set; }
+            public bool LogReads { get; private set; }
             public double? ManualBeamAngle { get; private set; }
 
             private Options()
@@ -227,6 +262,9 @@ namespace OpenClaw.KinectSdkAudioBridge
                         case "--agc":
                             options.AutomaticGainControl = true;
                             break;
+                        case "--log-reads":
+                            options.LogReads = true;
+                            break;
                         case "--manual-beam-angle":
                             options.ManualBeamAngle = Double.Parse(RequireValue(arg, queue), CultureInfo.InvariantCulture);
                             break;
@@ -249,6 +287,7 @@ namespace OpenClaw.KinectSdkAudioBridge
                 Console.WriteLine("  --manual-beam-angle <radians> Use a fixed beam angle instead of adaptive.");
                 Console.WriteLine("  --agc                         Enable Kinect automatic gain control.");
                 Console.WriteLine("  --no-noise-suppression        Disable Kinect noise suppression.");
+                Console.WriteLine("  --log-reads                   Log read sizes and timing to stderr.");
             }
 
             private static string RequireValue(string arg, Queue<string> queue)
