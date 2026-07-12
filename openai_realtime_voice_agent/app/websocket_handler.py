@@ -713,6 +713,35 @@ class WebSocketHandler:
             self._serializer.set_mic_flush_handler(_on_device_mic_flush)
             self._serializer.set_wake_handler(_on_device_wake)
 
+            async def _on_vision_context(text: str, image_path: str = ""):
+                clipped = " ".join(text.split())[:800]
+                if not clipped:
+                    return
+                suffix = f" Snapshot file: {image_path}" if image_path else ""
+                try:
+                    await openai_service.send_client_event(
+                        openai_rt_events.ConversationItemCreateEvent(
+                            item=openai_rt_events.ConversationItem(
+                                type="message",
+                                role="system",
+                                content=[openai_rt_events.ItemContent(
+                                    type="input_text",
+                                    text=(
+                                        "[wake visual context] A Kinect snapshot taken at wake time shows: "
+                                        f"{clipped}. Use this only if relevant. "
+                                        "Do not mention the camera unless useful."
+                                        f"{suffix}"
+                                    ),
+                                )],
+                            )
+                        )
+                    )
+                    logger.info(f"📷 wake visual context injected: {clipped}")
+                except Exception as e:
+                    logger.warning(f"⚠️ vision-context injection failed: {e!r}")
+
+            self._serializer.set_vision_context_handler(_on_vision_context)
+
             # Speaker context v1 (fork): per-wake voice-type verdict → injected
             # as a system conversation item. Out-of-band w.r.t. the audio path;
             # it lands ~2.5 s after the wake, so the FIRST reply of a turn may
