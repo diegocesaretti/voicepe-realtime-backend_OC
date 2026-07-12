@@ -5,6 +5,7 @@ import asyncio
 import json
 import queue
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -91,11 +92,15 @@ class AudioIO:
         output_device: int | None,
         input_sample_rate: int,
         input_channels: int,
+        input_backend: str = "portaudio",
+        sdk_bridge_exe: str | None = None,
     ):
         self.input_device = input_device
         self.output_device = output_device
         self.input_sample_rate = input_sample_rate
         self.input_channels = input_channels
+        self.input_backend = input_backend
+        self.sdk_bridge_exe = sdk_bridge_exe
         self.input_queue: queue.Queue[bytes] = queue.Queue(maxsize=100)
         self.wake_queue: queue.Queue[bytes] = queue.Queue(maxsize=100)
         self.output_queue: queue.Queue[bytes] = queue.Queue(maxsize=100)
@@ -103,16 +108,22 @@ class AudioIO:
         self._closed = threading.Event()
         self.input_stream: sd.InputStream | None = None
         self.output_stream: sd.OutputStream | None = None
+        self.sdk_process: subprocess.Popen[bytes] | None = None
+        self._sdk_threads: list[threading.Thread] = []
 
     def start(self) -> None:
-        self.input_stream = sd.InputStream(
-            samplerate=self.input_sample_rate,
-            blocksize=int(self.input_sample_rate * BLOCK_MS / 1000),
-            channels=self.input_channels,
-            dtype="int16",
-            device=self.input_device,
-            callback=self._input_callback,
-        )
+        if self.input_backend == "kinect-sdk":
+            self._start_sdk_input()
+        else:
+            self.input_stream = sd.InputStream(
+                samplerate=self.input_sample_rate,
+                blocksize=int(self.input_sample_rate * BLOCK_MS / 1000),
+                channels=self.input_channels,
+                dtype="int16",
+                device=self.input_device,
+                callback=self._input_callback,
+            )
+            self.input_stream.start()
         self.output_stream = sd.OutputStream(
             samplerate=BACKEND_OUTPUT_SAMPLE_RATE,
             blocksize=int(BACKEND_OUTPUT_SAMPLE_RATE * BLOCK_MS / 1000),
@@ -121,7 +132,6 @@ class AudioIO:
             device=self.output_device,
             callback=self._output_callback,
         )
-        self.input_stream.start()
         self.output_stream.start()
 
     def close(self) -> None:
@@ -130,6 +140,13 @@ class AudioIO:
             if stream:
                 stream.stop()
                 stream.close()
+        if self.sdk_process:
+            self.sdk_process.terminate()
+            try:
+                self.sdk_process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                self.sdk_process.kill()
+            self.sdk_process = None
 
     def clear_output(self) -> None:
         while True:
@@ -155,6 +172,9 @@ class AudioIO:
         if self._closed.is_set():
             return
         pcm = pcm16_mono_bytes(indata)
+        self._enqueue_input_pcm(pcm)
+
+    def _enqueue_input_pcm(self, pcm: bytes) -> None:
         try:
             self.input_queue.put_nowait(pcm)
         except queue.Full:
@@ -163,6 +183,50 @@ class AudioIO:
             self.wake_queue.put_nowait(pcm)
         except queue.Full:
             pass
+
+    def _start_sdk_input(self) -> None:
+        if not self.sdk_bridge_exe:
+            raise RuntimeError("sdk_bridge_exe is required for kinect-sdk input")
+        exe = Path(self.sdk_bridge_exe)
+        if not exe.exists():
+            raise RuntimeError(f"Kinect SDK bridge not found: {exe}")
+        self.sdk_process = subprocess.Popen(
+            [str(exe), "--stdout-pcm", "--probe-seconds", "0"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        read_size = int(self.input_sample_rate * BLOCK_MS / 1000) * 2
+        reader = threading.Thread(target=self._sdk_stdout_reader, args=(read_size,), daemon=True)
+        err_reader = threading.Thread(target=self._sdk_stderr_reader, daemon=True)
+        reader.start()
+        err_reader.start()
+        self._sdk_threads.extend([reader, err_reader])
+
+    def _sdk_stdout_reader(self, read_size: int) -> None:
+        assert self.sdk_process is not None and self.sdk_process.stdout is not None
+        while not self._closed.is_set():
+            chunk = self.sdk_process.stdout.read(read_size)
+            if not chunk:
+                if self.sdk_process.poll() is not None:
+                    print(f"Kinect SDK bridge exited with {self.sdk_process.returncode}", file=sys.stderr)
+                    return
+                time.sleep(0.01)
+                continue
+            self._enqueue_input_pcm(chunk)
+
+    def _sdk_stderr_reader(self) -> None:
+        assert self.sdk_process is not None and self.sdk_process.stderr is not None
+        while not self._closed.is_set():
+            line = self.sdk_process.stderr.readline()
+            if not line:
+                if self.sdk_process.poll() is not None:
+                    return
+                time.sleep(0.05)
+                continue
+            try:
+                print(f"sdk: {line.decode(errors='replace').rstrip()}", file=sys.stderr)
+            except Exception:
+                pass
 
     def _output_callback(self, outdata, frame_count, _time_info, status) -> None:
         if status:
@@ -368,14 +432,24 @@ async def ping_loop(ws, stop_event: asyncio.Event) -> None:
 
 
 async def run_client(args) -> None:
-    input_device = resolve_device(args.input_device, input_device=True)
+    input_device = None if args.input_backend == "kinect-sdk" else resolve_device(args.input_device, input_device=True)
     output_device = resolve_device(args.output_device, input_device=False)
-    input_channels = args.input_channels or default_input_channels(input_device)
+    input_channels = 1 if args.input_backend == "kinect-sdk" else (args.input_channels or default_input_channels(input_device))
+    sdk_bridge_exe = args.sdk_bridge_exe
+    if args.input_backend == "kinect-sdk" and not sdk_bridge_exe:
+        sdk_bridge_exe = str(
+            Path(__file__).resolve().parent
+            / "kinect_sdk_audio_bridge"
+            / "bin"
+            / "OpenClaw.KinectSdkAudioBridge.exe"
+        )
     audio = AudioIO(
         input_device=input_device,
         output_device=output_device,
         input_sample_rate=args.input_sample_rate,
         input_channels=input_channels,
+        input_backend=args.input_backend,
+        sdk_bridge_exe=sdk_bridge_exe,
     )
     state = ClientState(mic_open=args.open_mic, continuous=args.open_mic)
     stop_event = asyncio.Event()
@@ -388,7 +462,7 @@ async def run_client(args) -> None:
             pass
 
     print(
-        f"Connecting to {args.ws_url} with input_device={input_device}, "
+        f"Connecting to {args.ws_url} with input_backend={args.input_backend}, input_device={input_device}, "
         f"input_channels={input_channels}, input_rate={args.input_sample_rate}"
     )
     async with websockets.connect(args.ws_url, max_size=16 * 1024 * 1024) as ws:
@@ -410,6 +484,39 @@ async def run_client(args) -> None:
 
 
 async def dry_run_audio(args) -> None:
+    if args.input_backend == "kinect-sdk":
+        sdk_bridge_exe = args.sdk_bridge_exe or str(
+            Path(__file__).resolve().parent
+            / "kinect_sdk_audio_bridge"
+            / "bin"
+            / "OpenClaw.KinectSdkAudioBridge.exe"
+        )
+        audio = AudioIO(
+            input_device=None,
+            output_device=None,
+            input_sample_rate=args.input_sample_rate,
+            input_channels=1,
+            input_backend="kinect-sdk",
+            sdk_bridge_exe=sdk_bridge_exe,
+        )
+        frames = 0
+        started = time.monotonic()
+        audio.start()
+        try:
+            print(f"Capturing Kinect SDK input via {sdk_bridge_exe}. Press Ctrl+C to stop.", flush=True)
+            while True:
+                try:
+                    chunk = await asyncio.to_thread(audio.input_queue.get, True, 1.0)
+                    frames += len(chunk) // 2
+                except queue.Empty:
+                    pass
+                elapsed = max(0.001, time.monotonic() - started)
+                print(f"received {frames} frames ({frames / elapsed:.0f} frames/sec)", flush=True)
+                if args.dry_run_seconds and elapsed >= args.dry_run_seconds:
+                    return
+        finally:
+            audio.close()
+
     input_device = resolve_device(args.input_device, input_device=True)
     input_channels = args.input_channels or default_input_channels(input_device)
     frames = 0
@@ -449,6 +556,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run-audio", action="store_true")
     parser.add_argument("--dry-run-seconds", type=float)
     parser.add_argument("--ws-url", default=DEFAULT_WS_URL)
+    parser.add_argument("--input-backend", choices=("portaudio", "kinect-sdk"), default="portaudio")
+    parser.add_argument("--sdk-bridge-exe", help="Path to OpenClaw.KinectSdkAudioBridge.exe")
     parser.add_argument("--input-device", default="Kinect")
     parser.add_argument("--output-device")
     parser.add_argument("--input-sample-rate", type=int, default=DEFAULT_INPUT_SAMPLE_RATE)
