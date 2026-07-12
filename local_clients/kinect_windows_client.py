@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import queue
+import shutil
 import signal
 import subprocess
 import sys
@@ -351,9 +352,85 @@ async def trigger_wake(ws, audio: AudioIO, state: ClientState, args) -> None:
     if args.wake_sound:
         audio.enqueue_tone(args.wake_sound_frequency, args.wake_sound_ms)
     await send_json(ws, {"type": "wake"})
+    if args.vision_context_provider != "none":
+        asyncio.create_task(send_wake_vision_context(ws, args))
     if args.wake_open_delay_ms > 0:
         await asyncio.sleep(args.wake_open_delay_ms / 1000)
     state.mic_open = True
+
+
+async def send_wake_vision_context(ws, args) -> None:
+    try:
+        snapshot = copy_wake_snapshot(args)
+        if snapshot is None:
+            return
+        summary = await describe_snapshot(snapshot, args)
+        if not summary:
+            return
+        await send_json(ws, {
+            "type": "vision_context",
+            "text": summary,
+            "image_path": str(snapshot),
+        })
+        print(f"vision context sent: {summary}", flush=True)
+    except Exception as exc:
+        print(f"vision context skipped: {exc!r}", flush=True)
+
+
+def copy_wake_snapshot(args) -> Path | None:
+    if not args.sdk_snapshot_dir:
+        return None
+    latest = Path(args.sdk_snapshot_dir) / "latest.jpg"
+    if not latest.exists():
+        return None
+    out_dir = Path(args.vision_wake_snapshot_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    target = out_dir / f"wake_{stamp}.jpg"
+    shutil.copy2(latest, target)
+    return target
+
+
+async def describe_snapshot(snapshot: Path, args) -> str | None:
+    if args.vision_context_provider != "openclaw-cli":
+        return None
+    prompt = (
+        "Resume esta imagen en una sola frase corta en español. "
+        "Inclui solo objetos, personas o situacion visible que pueda servirle "
+        "a un asistente de voz; si no aporta contexto, responde 'sin contexto relevante'."
+    )
+    proc = await asyncio.create_subprocess_exec(
+        "openclaw",
+        "infer",
+        "image",
+        "describe",
+        "--file",
+        str(snapshot),
+        "--prompt",
+        prompt,
+        "--timeout-ms",
+        str(args.vision_context_timeout_ms),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(),
+            timeout=max(1.0, args.vision_context_timeout_ms / 1000 + 2.0),
+        )
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        return None
+    if proc.returncode != 0:
+        err = stderr.decode(errors="replace").strip()
+        if err:
+            print(f"vision describe failed: {err[:300]}", flush=True)
+        return None
+    text = stdout.decode(errors="replace").strip()
+    if not text:
+        return None
+    return " ".join(text.split())[:500]
 
 
 async def keyboard_loop(ws, audio: AudioIO, state: ClientState, stop_event: asyncio.Event, args) -> None:
@@ -566,6 +643,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input-backend", choices=("portaudio", "kinect-sdk"), default="portaudio")
     parser.add_argument("--sdk-bridge-exe", help="Path to OpenClaw.KinectSdkAudioBridge.exe")
     parser.add_argument("--sdk-snapshot-dir", help="Directory where the Kinect SDK bridge writes latest.jpg")
+    parser.add_argument(
+        "--vision-context-provider",
+        choices=("none", "openclaw-cli"),
+        default="none",
+        help="Analyze the latest Kinect snapshot after wake and send a short visual context to the backend",
+    )
+    parser.add_argument("--vision-context-timeout-ms", type=int, default=5000)
+    parser.add_argument("--vision-wake-snapshot-dir", default="data/kinect-wake-snapshots")
     parser.add_argument("--input-device", default="Kinect")
     parser.add_argument("--output-device")
     parser.add_argument("--input-sample-rate", type=int, default=DEFAULT_INPUT_SAMPLE_RATE)
