@@ -19,6 +19,7 @@ from app.session_manager import SessionManager
 from app.websocket_handler import WebSocketHandler
 from app.speaker_context import SpeakerProbe
 from app.timers import TimerRegistry, get_timer_tool_definitions, register_timer_tools
+from app.openclaw_tools import get_openclaw_tool_definitions, register_openclaw_tools
 from app.enrollment import (
     EnrollmentRecorder,
     EnrollmentConductor,
@@ -370,6 +371,7 @@ class Application:
         web_search_model = _resolve_choice(
             "WEB_SEARCH_MODEL", "WEB_SEARCH_MODEL_CUSTOM", "gpt-5.5"
         )
+        enable_openclaw_tools = os.environ.get("ENABLE_OPENCLAW_TOOLS", "true").lower() == "true"
 
         # Get recording setting (optional, defaults to false)
         enable_recording = os.environ.get("ENABLE_RECORDING", "false").lower() == "true"
@@ -545,6 +547,7 @@ class Application:
         self.mcp_client = mcp_client
         self.enable_web_search = enable_web_search
         self.web_search_model = web_search_model
+        self.enable_openclaw_tools = enable_openclaw_tools
 
         # Initialize audio recording service (optional)
         self.audio_recording_service = AudioRecordingService(
@@ -636,6 +639,8 @@ class Application:
             all_tools.append(get_enrollment_tool_definition())
             all_tools.append(get_false_alarm_tool_definition())
             all_tools.extend(get_timer_tool_definitions())
+            if self.enable_openclaw_tools:
+                all_tools.extend(get_openclaw_tool_definitions())
 
             # Get MCP tool definitions if available
             mcp_tools_schema = None
@@ -798,6 +803,9 @@ class Application:
             )
             register_timer_tools(self.openai_service, self.timer_registry)
             logger.info("✅ Registered timer tools (set/cancel/list)")
+            if self.enable_openclaw_tools:
+                register_openclaw_tools(self.openai_service)
+                logger.info("Registered OpenClaw tools")
 
             # Register MCP tool handlers if available
             if self.mcp_client and mcp_tools_schema:
