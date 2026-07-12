@@ -43,9 +43,10 @@ def resolve_device(selector: str | None, *, input_device: bool) -> int | None:
         if channels > 0 and needle in str(device["name"]).lower():
             matches.append(idx)
     if matches:
+        preferred_hostapi = "wasapi" if input_device else "mme"
         for idx in matches:
             hostapi_name = str(hostapis[int(devices[idx]["hostapi"])]["name"]).lower()
-            if "wasapi" in hostapi_name:
+            if preferred_hostapi in hostapi_name:
                 return idx
         return matches[0]
     kind = "input" if input_device else "output"
@@ -138,7 +139,7 @@ class AudioIO:
                 break
         self._output_buffer.clear()
 
-    def enqueue_tone(self, frequency_hz: float, duration_ms: int, volume: float = 0.25) -> None:
+    def enqueue_tone(self, frequency_hz: float, duration_ms: int, volume: float = 0.6) -> None:
         frames = max(1, int(BACKEND_OUTPUT_SAMPLE_RATE * duration_ms / 1000))
         t = np.arange(frames, dtype=np.float32) / BACKEND_OUTPUT_SAMPLE_RATE
         tone = np.sin(2.0 * np.pi * frequency_hz * t)
